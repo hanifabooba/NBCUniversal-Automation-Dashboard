@@ -1,0 +1,79 @@
+<section class="admin-bg py-4">
+  <div class="container">
+    <button class="btn btn-outline-success mb-3" type="button" (click)="goBack()">
+      <i class="bi bi-arrow-left"></i>
+      Back
+    </button>
+    <div
+      *ngIf="alertMessage"
+      class="alert"
+      [ngClass]="{
+        'alert-success': alertType === 'success',
+        'alert-danger': alertType === 'danger'
+      }"
+    >
+      {{ alertMessage }}
+    </div>
+    <div class="d-flex flex-column flex-lg-row align-items-lg-center justify-content-between mb-4 gap-3">
+      <div>
+        <p class="text-uppercase text-success fw-semibold mb-1">Manager / Reports</p>
+        <h1 class="h3 fw-bold">Completed Tasks</h1>
+        <p class="mb-0 text-muted">Sort and review finished work using SB Admin styled tables.</p>
+      </div>
+      <div class="btn-group">
+        <button class="btn btn-outline-success" type="button" (click)="sortBy('employeeName')">
+          <i class="bi bi-people-fill me-1"></i> Sort by Employee
+        </button>
+        <button class="btn btn-success" type="button" (click)="sortBy('completedAt')">
+          <i class="bi bi-calendar-week me-1"></i> Sort by Date
+        </button>
+        <button class="btn btn-outline-success" type="button" (click)="refresh()">
+          <i class="bi bi-arrow-clockwise me-1"></i> Refresh
+        </button>
+      </div>
+    </div>
+
+    <div class="card admin-card">
+      <div class="card-body">
+        <div *ngIf="loading" class="text-center text-muted py-4">
+          <div class="spinner-border text-success" role="status">
+            <span class="visually-hidden">Loading...</span>
+          </div>
+        </div>
+        <div class="table-responsive" *ngIf="!loading">
+          <table class="table table-hover align-middle mb-0">
+            <thead class="table-light">
+              <tr>
+                <th>Task</th>
+                <th>Employee</th>
+                <th>Completed At</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr *ngFor="let t of tasks">
+                <td>
+                  <div class="fw-semibold">{{ t.title }}</div>
+                  <small class="text-muted">Ticket #{{ t.id }}</small>
+                </td>
+                <td>
+                  <span class="task-chip"><i class="bi bi-person-fill"></i> {{ t.employeeName }}</span>
+                </td>
+                <td>
+                  <div class="d-flex align-items-center gap-2">
+                    <i class="bi bi-clock-history text-success"></i>
+                    {{ t.completedAt || 'Pending confirmation' }}
+                  </div>
+                </td>
+              </tr>
+              <tr *ngIf="!tasks.length">
+                <td colspan="3" class="text-center text-muted py-4">
+                  No completed tasks recorded yet.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>

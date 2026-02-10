@@ -1,0 +1,273 @@
+<section class="py-4">
+  <div class="d-flex flex-column flex-md-row align-items-start justify-content-between gap-2 mb-3">
+      <div>
+        <p class="text-success text-uppercase small mb-1">Team Weekly Task</p>
+        <h1 class="h4 mb-0">Plan, track, and report by week</h1>
+        <div class="text-muted small">Week window: {{ weekRange() }} (Mon–Fri)</div>
+      </div>
+    <div class="d-flex align-items-center gap-2">
+      <button class="btn btn-outline-secondary btn-sm" type="button" (click)="changeWeek(-1)">Prev week</button>
+      <button class="btn btn-outline-secondary btn-sm" type="button" (click)="selectedWeek.set(currentWeek())">Current week</button>
+      <button class="btn btn-outline-secondary btn-sm" type="button" (click)="changeWeek(1)">Next week</button>
+    </div>
+  </div>
+
+  <ul class="nav nav-pills mb-3">
+    <li class="nav-item">
+      <button class="nav-link" [class.active]="activeTab() === 'weekly'" (click)="switchTab('weekly')">Weekly Task</button>
+    </li>
+    <li class="nav-item">
+      <button class="nav-link" [class.active]="activeTab() === 'board'" (click)="switchTab('board')">Task Status Board</button>
+    </li>
+    <li class="nav-item">
+      <button class="nav-link" [class.active]="activeTab() === 'report'" (click)="switchTab('report')">Report Dashboard</button>
+    </li>
+  </ul>
+
+  <!-- Weekly Task tab -->
+  <div *ngIf="activeTab() === 'weekly'">
+    <div class="card mb-3">
+      <div class="card-body">
+        <h2 class="h6 text-uppercase text-muted mb-3">Add weekly task</h2>
+        <div class="row g-3">
+          <div class="col-md-4">
+            <label class="form-label small text-muted">Team</label>
+            <input class="form-control" [(ngModel)]="team" placeholder="Team name">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label small text-muted">Engineer</label>
+            <input class="form-control" [(ngModel)]="engineer" placeholder="Engineer name">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label small text-muted">Priority</label>
+            <select class="form-select" [(ngModel)]="priority">
+              <option>Low</option>
+              <option>Medium</option>
+              <option>High</option>
+              <option>Critical</option>
+            </select>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label small text-muted">Task</label>
+            <input class="form-control" [(ngModel)]="title" placeholder="Task title">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label small text-muted">Description</label>
+            <input class="form-control" [(ngModel)]="description" placeholder="Short description">
+          </div>
+        </div>
+        <div class="mt-3 d-flex justify-content-end">
+          <button class="btn btn-success" type="button" (click)="addTask()">Add task</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-body table-responsive">
+        <h2 class="h6 text-uppercase text-muted mb-3">Tasks for week of {{ selectedWeek() }}</h2>
+        <table class="table table-bordered align-middle">
+          <thead>
+            <tr>
+              <th>Team</th>
+              <th>Task</th>
+              <th>Description</th>
+              <th>Priority</th>
+              <th>Engineer</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr *ngIf="!tasksForWeek().length">
+              <td colspan="6" class="text-center text-muted">No tasks yet.</td>
+            </tr>
+            <tr *ngFor="let t of tasksForWeek()">
+              <td>{{ t.team }}</td>
+              <td>{{ t.title }}</td>
+              <td>{{ t.description || '—' }}</td>
+              <td>{{ t.priority }}</td>
+              <td>{{ t.engineer }}</td>
+              <td class="text-uppercase small">{{ t.status }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Task Status Board tab -->
+  <div *ngIf="activeTab() === 'board'">
+    <div class="row g-3">
+      <div class="col-12 col-md-6 col-xl" *ngFor="let col of statusColumns">
+        <div class="card h-100">
+          <div class="card-header fw-semibold text-uppercase small" [ngClass]="col.color">
+            {{ col.label }}
+          </div>
+          <div
+            class="card-body d-flex flex-column gap-2"
+            cdkDropList
+            [id]="col.key"
+            [cdkDropListData]="tasksByStatus(col.key)"
+            [cdkDropListConnectedTo]="dropListIds"
+            (cdkDropListDropped)="drop($event)"
+          >
+            <div class="card shadow-sm border" cdkDrag *ngFor="let t of tasksByStatus(col.key)">
+              <div class="card-body p-2">
+                <div class="d-flex justify-content-between align-items-center mb-1">
+                  <div class="fw-semibold">{{ t.title }}</div>
+                  <span
+                    class="badge"
+                    [ngClass]="{
+                      'text-bg-danger': t.priority === 'Critical',
+                      'text-bg-warning': t.priority === 'High',
+                      'text-bg-info': t.priority === 'Medium',
+                      'text-bg-secondary': t.priority === 'Low'
+                    }"
+                  >
+                    {{ t.priority }}
+                  </span>
+                </div>
+                <div class="small text-muted mb-1">Team: {{ t.team }} · Engineer: {{ t.engineer }}</div>
+                <div class="small text-muted">Status: {{ t.status }} · Week: {{ t.weekOf }}</div>
+                <div class="small" *ngIf="t.blockedReason && t.status === 'blocked'">
+                  <strong>Blocked:</strong> {{ t.blockedReason }}
+                </div>
+              </div>
+            </div>
+            <div *ngIf="!tasksByStatus(col.key).length" class="text-muted small text-center">No tasks</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Report Dashboard tab -->
+<div *ngIf="activeTab() === 'report'">
+    <div class="card mb-3">
+      <div class="card-body d-flex flex-wrap align-items-center gap-3">
+        <div class="d-flex align-items-center gap-2">
+          <label class="text-muted small mb-0">View</label>
+          <select class="form-select form-select-sm" [(ngModel)]="reportFilter">
+            <option value="week">This Week</option>
+            <option value="month">This Month</option>
+            <option value="year">This Year</option>
+            <option value="all">All Time</option>
+          </select>
+        </div>
+        <div class="d-flex align-items-center gap-2" *ngIf="reportFilter() === 'week'">
+          <label class="text-muted small mb-0">Week of</label>
+          <input type="date" class="form-control form-control-sm" [value]="selectedWeek()" (change)="setWeekFromPicker($any($event.target).value)">
+        </div>
+        <div class="d-flex align-items-center gap-2" *ngIf="reportFilter() === 'month'">
+          <label class="text-muted small mb-0">Month</label>
+          <input type="month" class="form-control form-control-sm" [ngModel]="reportMonth()" (ngModelChange)="reportMonth.set($event)">
+        </div>
+        <div class="d-flex align-items-center gap-2" *ngIf="reportFilter() === 'year'">
+          <label class="text-muted small mb-0">Year</label>
+          <input type="number" class="form-control form-control-sm" min="2000" max="2100" [ngModel]="reportYear()" (ngModelChange)="reportYear.set($event)">
+        </div>
+      </div>
+    </div>
+
+    <div class="row g-3">
+      <div class="col-12 col-lg-5">
+        <div class="card h-100">
+          <div class="card-body text-center">
+            <p class="text-uppercase text-muted small mb-1">Progress</p>
+            <div class="pie pie-report mx-auto" [style.background]="pieStyle()">
+              <div class="pie__center pie__center--report">
+                <div class="pie__value">{{ stats().total ? Math.round((stats().byStatus.done / stats().total) * 100) : 0 }}%</div>
+                <div class="pie__label">Done</div>
+              </div>
+            </div>
+            <div class="d-flex flex-wrap justify-content-center gap-2 mt-3 small text-muted">
+              <span class="badge bg-secondary-subtle text-secondary">Assigned: {{ stats().byStatus.assigned }}</span>
+              <span class="badge bg-warning-subtle text-warning">Pending: {{ stats().byStatus.pending }}</span>
+              <span class="badge bg-info-subtle text-info">In-progress: {{ stats().byStatus['in-progress'] }}</span>
+              <span class="badge bg-danger-subtle text-danger">Blocked: {{ stats().byStatus.blocked }}</span>
+              <span class="badge bg-success-subtle text-success">Done: {{ stats().byStatus.done }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="col-12 col-lg-7">
+        <div class="card h-100">
+          <div class="card-body">
+            <h2 class="h6 text-uppercase text-muted mb-3">Tasks by Team</h2>
+            <div *ngIf="stats().byTeam | keyvalue as entries; else noTeams">
+              <div class="mb-2" *ngFor="let entry of entries">
+                <div class="d-flex justify-content-between small">
+                  <span class="fw-semibold">{{ entry.key }}</span>
+                  <span>{{ entry.value }} task(s)</span>
+                </div>
+                <div class="progress" style="height: 8px;">
+                  <div
+                    class="progress-bar bg-success"
+                    role="progressbar"
+                    [style.width]="(entry.value / stats().total) * 100 + '%'"
+                    [attr.aria-valuenow]="entry.value"
+                    aria-valuemin="0"
+                    [attr.aria-valuemax]="stats().total"
+                  ></div>
+                </div>
+              </div>
+            </div>
+            <ng-template #noTeams>
+              <div class="text-muted small">No tasks yet.</div>
+            </ng-template>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+<style>
+.pie-report {
+  width: min(320px, 70vw);
+  height: min(320px, 70vw);
+  border-radius: 50%;
+  position: relative;
+  display: grid;
+  place-items: center;
+  box-shadow:
+    0 12px 30px rgba(0, 0, 0, 0.08),
+    0 0 0 10px rgba(13, 110, 253, 0.05);
+  isolation: isolate;
+  overflow: visible;
+}
+.pie-report::before {
+  content: '';
+  position: absolute;
+  inset: -10px;
+  border-radius: 50%;
+  background: conic-gradient(
+      rgba(25, 135, 84, 0.2),
+      rgba(13, 110, 253, 0.18),
+      rgba(255, 193, 7, 0.18),
+      rgba(220, 53, 69, 0.2),
+      rgba(173, 181, 189, 0.15)
+  );
+  filter: blur(12px);
+  opacity: 0.9;
+  z-index: 0;
+  pointer-events: none;
+}
+.pie__center--report {
+  width: 46%;
+  height: 46%;
+  border-radius: 50%;
+  background: linear-gradient(145deg, #ffffff, #f4f7fb);
+  display: grid;
+  place-items: center;
+  text-align: center;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.06);
+  z-index: 2;
+}
+.pie__value {
+  font-weight: 700;
+  font-size: 1.3rem;
+}
+.pie__label {
+  font-size: 0.75rem;
+  color: #6c757d;
+}
+</style>

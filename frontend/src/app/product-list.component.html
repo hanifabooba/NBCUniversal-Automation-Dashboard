@@ -1,0 +1,82 @@
+<section class="mb-3">
+  <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
+    <div>
+      <h1 class="mb-1">Production Site Health</h1>
+      <p class="text-muted mb-0">Daily snapshots from Jenkins site checks.</p>
+    </div>
+    <div class="d-flex align-items-center gap-2">
+      <select class="form-select form-select-sm" style="min-width: 180px" [(ngModel)]="selectedDay">
+        <option *ngFor="let d of days" [ngValue]="d">{{ d === 'all' ? 'All days' : (d | date:'mediumDate') }}</option>
+      </select>
+      <button class="btn btn-success btn-sm" type="button" (click)="syncNow()" [disabled]="loading">
+        <i class="bi bi-arrow-repeat me-1"></i>
+        Sync latest
+      </button>
+    </div>
+  </div>
+  <div *ngIf="error" class="alert alert-danger">{{ error }}</div>
+  <div *ngIf="loading" class="alert alert-info">Loading environment health…</div>
+</section>
+
+<section class="grid grid-2">
+  <ng-container *ngIf="filteredRuns().length; else noRuns">
+    <article class="slider-item" *ngFor="let run of filteredRuns()">
+      <div class="slider-item-content">
+        <button class="btn btn-link p-0 w-100 text-start" type="button" (click)="toggle(run)">
+          <div class="d-flex align-items-start justify-content-between gap-2 mb-2">
+            <div>
+              <p class="text-uppercase text-success fw-semibold small mb-1">{{ run.site }}</p>
+              <h2 class="h5 mb-0">{{ run.fetchedAt | date:'fullDate' }}</h2>
+              <small class="text-muted">Fetched: {{ run.fetchedAt | date:'short' }}</small>
+            </div>
+            <div class="text-end">
+              <span class="badge bg-light text-muted d-block">Checks: {{ run.checks?.length || 0 }}</span>
+              <i class="bi" [ngClass]="isOpen(run) ? 'bi-chevron-up' : 'bi-chevron-down'"></i>
+            </div>
+          </div>
+        </button>
+
+        <div class="d-flex flex-wrap gap-2 mb-3">
+          <span class="badge bg-success-subtle text-success-emphasis">Pass: {{ statusCounts(run).pass }}</span>
+          <span class="badge bg-warning-subtle text-warning-emphasis">Warn: {{ statusCounts(run).warn }}</span>
+          <span class="badge bg-danger-subtle text-danger-emphasis">Fail: {{ statusCounts(run).fail }}</span>
+        </div>
+
+        <div class="list-unstyled small" *ngIf="isOpen(run)">
+          <div class="d-flex align-items-start gap-2" *ngFor="let check of run.checks">
+            <span
+              class="badge rounded-pill"
+              [ngClass]="{
+                'bg-success-subtle text-success-emphasis': check.status === 'PASS',
+                'bg-warning-subtle text-warning-emphasis': check.status === 'WARNING',
+                'bg-danger-subtle text-danger-emphasis': check.status !== 'PASS' && check.status !== 'WARNING'
+              }"
+            >
+              {{ check.status }}
+            </span>
+            <div>
+              <div class="fw-semibold">{{ check.name }}</div>
+              <div class="text-muted">{{ check.detail }}</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="d-flex align-items-center justify-content-between mt-3">
+          <a class="btn btn-outline-success btn-sm" [href]="run.sourceUrl" target="_blank" rel="noopener">
+            View Jenkins report
+          </a>
+          <span class="text-muted small">Run ID: {{ run.id }}</span>
+        </div>
+      </div>
+    </article>
+  </ng-container>
+  <ng-template #noRuns>
+    <article class="slider-item">
+      <div class="slider-item-content text-center">
+        <p class="text-muted mb-3">No environment health runs yet.</p>
+        <button class="btn btn-success btn-sm" type="button" (click)="syncNow()" [disabled]="loading">Sync latest</button>
+        <button class="btn btn-outline-secondary btn-sm ms-2" type="button" (click)="fetchRuns()" [disabled]="loading">Refresh</button>
+      </div>
+    </article>
+  </ng-template>
+</section>

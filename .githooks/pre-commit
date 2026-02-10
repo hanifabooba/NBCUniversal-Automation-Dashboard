@@ -1,0 +1,42 @@
+#!/bin/bash
+set -e
+
+# Block committing common secret patterns or forbidden paths.
+patterns='AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|AWS_SECRET_ACCESS_KEY=|JENKINS_TOKEN=|X-Amz-Credential=|BEGIN (RSA|DSA|EC|OPENSSH) PRIVATE KEY|-----BEGIN PRIVATE KEY-----'
+
+failed=0
+while IFS= read -r f; do
+  [ -z "$f" ] && continue
+
+  # Block .env and backend/data from ever being committed.
+  case "$f" in
+    .githooks/pre-commit)
+      # Avoid self-matching on the patterns list.
+      continue
+      ;;
+    *.env|*.env.*|backend/.env|backend/data/*)
+      echo "Blocked: $f is not allowed to be committed."
+      failed=1
+      continue
+      ;;
+  esac
+
+  # Skip deleted files
+  if ! git cat-file -e ":$f" 2>/dev/null; then
+    continue
+  fi
+
+  # Scan staged content for secret-like patterns
+  if git show ":$f" | grep -I -n -E "$patterns" >/dev/null 2>&1; then
+    echo "Secret-like pattern found in staged file: $f"
+    git show ":$f" | grep -I -n -E "$patterns" | head -n 5
+    failed=1
+  fi
+done < <(git diff --cached --name-only --diff-filter=ACMRT)
+
+if [ "$failed" -ne 0 ]; then
+  echo "Commit blocked. Remove secrets or keep them out of git."
+  exit 1
+fi
+
+exit 0

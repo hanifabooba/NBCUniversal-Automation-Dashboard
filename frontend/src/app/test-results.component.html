@@ -1,0 +1,107 @@
+<section class="results-header">
+  <div>
+    <p class="eyebrow">Execution Dashboard</p>
+    <h1 class="page-title">Test Results</h1>
+  </div>
+  <div class="header-actions">
+    <button class="btn btn-outline-success" type="button" (click)="loadCurrentRun()">
+      <i class="bi bi-arrow-repeat me-1"></i>
+      Reload
+    </button>
+  </div>
+</section>
+
+<div *ngIf="error()" class="alert alert-danger d-flex align-items-center gap-2">
+  <i class="bi bi-exclamation-triangle-fill"></i>
+  <span>{{ error() }}</span>
+</div>
+
+<div *ngIf="loading()" class="alert alert-info d-flex align-items-center gap-2">
+  <i class="bi bi-hourglass-split"></i>
+  <span>Loading results…</span>
+</div>
+
+<section *ngIf="!loading()" class="run-grid">
+  <div class="run-card shadow-sm">
+    <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-3">
+      <div class="d-flex flex-wrap align-items-center gap-2">
+        <label class="fw-semibold small text-uppercase text-muted mb-0">Select run</label>
+        <select class="form-select form-select-sm" style="max-width: 320px"
+          [ngModel]="selectedRunId"
+          (ngModelChange)="onRunChange($event)"
+          [disabled]="!resultRuns.length">
+          <option *ngIf="!resultRuns.length" [value]="null">No runs available yet</option>
+          <option *ngFor="let rr of resultRuns" [value]="rr.id">
+            {{ rr.name }} · {{ rr.createdAt | date:'short' }}
+          </option>
+        </select>
+        <a *ngIf="selectedResultUrl" class="btn btn-outline-success btn-sm" [href]="selectedResultUrl" target="_blank" rel="noreferrer">
+          <i class="bi bi-box-arrow-up-right me-1"></i> View report
+        </a>
+      </div>
+      <div class="ticker">
+        <div class="ticker__track">
+          <span class="ticker__item pass">Passed: {{ currentSummary.passed }}</span>
+          <span class="ticker__item fail">Failed: {{ currentSummary.failed }}</span>
+          <span class="ticker__item skip">Skipped: {{ currentSummary.skipped }}</span>
+          <span class="ticker__item date">Executed: {{ currentSummary.name }}</span>
+        </div>
+      </div>
+    </div>
+    <div *ngIf="runLoading()" class="alert alert-info d-flex align-items-center gap-2 py-2 px-3 mb-3">
+      <i class="bi bi-cloud-download"></i>
+      <span>Fetching test.json for this run…</span>
+    </div>
+    <div class="run-hero">
+      <div class="pie-wrap">
+        <div class="text-center mb-2">
+          <p class="eyebrow text-uppercase">Current run</p>
+          <h2 class="h5 mb-1">{{ currentSummary.name }}</h2>
+          <div class="text-muted small">{{ currentSummary.total }} tests</div>
+        </div>
+        <div class="pie" [style.background]="pieStyle(currentSummary)">
+          <div class="pie__center">
+            <div class="pie__value">{{ percent(currentSummary.passed, currentSummary.total) }}%</div>
+            <div class="pie__label">passed</div>
+          </div>
+        </div>
+      </div>
+      <div class="funnel">
+        <div class="funnel__title">Funnel view</div>
+        <div class="funnel__bar pass" [style.--width]="percent(currentSummary.passed, currentSummary.total) + '%'" [class.empty]="currentSummary.passed === 0">
+          <span>Passed · {{ currentSummary.passed }}</span>
+        </div>
+        <div class="funnel__bar fail" [style.--width]="percent(currentSummary.failed, currentSummary.total) + '%'" [class.empty]="currentSummary.failed === 0">
+          <span>Failed · {{ currentSummary.failed }}</span>
+        </div>
+        <div class="funnel__bar skip" [style.--width]="percent(currentSummary.skipped, currentSummary.total) + '%'" [class.empty]="currentSummary.skipped === 0">
+          <span>Skipped · {{ currentSummary.skipped }}</span>
+        </div>
+      </div>
+    </div>
+    <div class="run-stats mt-3">
+      <span class="badge bg-success-subtle text-success-emphasis">Passed: {{ currentSummary.passed }}</span>
+      <span class="badge bg-danger-subtle text-danger-emphasis">Failed: {{ currentSummary.failed }}</span>
+      <span class="badge bg-secondary-subtle text-secondary-emphasis">Skipped: {{ currentSummary.skipped }}</span>
+      <span class="badge bg-light text-muted">Total: {{ currentSummary.total }}</span>
+    </div>
+    <div class="mt-3 ticker ticker--report">
+      <div class="ticker__track ticker__track--report">
+        <span class="ticker__item report">
+          <img src="assets/images/nbcu.png" alt="nbcu" class="ticker__logo">
+          NBCUniversal Automation · Detailed Test Report stream
+        </span>
+      </div>
+    </div>
+    <div class="mt-3">
+      <a *ngIf="selectedResultUrl" class="btn btn-outline-success" [href]="selectedResultUrl" target="_blank" rel="noreferrer">
+        <i class="bi bi-box-arrow-up-right me-1"></i>
+        Detailed Test Report
+      </a>
+      <a *ngIf="!selectedResultUrl" class="btn btn-outline-secondary disabled" tabindex="-1" aria-disabled="true">
+        <i class="bi bi-box-arrow-up-right me-1"></i>
+        Detailed Test Report (not available yet)
+      </a>
+    </div>
+  </div>
+</section>

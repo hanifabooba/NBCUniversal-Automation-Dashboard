@@ -1,0 +1,68 @@
+<section class="py-5">
+  <div class="container">
+    <div class="d-flex flex-column flex-md-row align-items-md-center justify-content-between mb-4">
+      <div>
+        <p class="text-uppercase text-success fw-semibold small mb-1">Track your order</p>
+        <h1 class="h4 mb-0">Order #{{ order?.id ?? '...' }}</h1>
+        <small class="text-muted">Watch your delivery move from kitchen to doorstep.</small>
+      </div>
+      <div class="text-end">
+        <div class="badge bg-success-subtle text-success-emphasis" *ngIf="order">Status: {{ order.stage }}</div>
+      </div>
+    </div>
+
+    <div class="card border-0 shadow-sm mb-4">
+      <div class="card-body">
+        <div class="progress-track">
+          <div class="progress-track__bar"></div>
+          <div class="progress-track__markers">
+            <div
+              *ngFor="let stage of stages; let i = index"
+              class="progress-track__marker"
+              [class.active]="i <= currentIndex()"
+              [style.left.%]="(i / (stages.length - 1)) * 100"
+            >
+              <div class="progress-track__dot"></div>
+              <div class="progress-track__label">{{ stage.label }}</div>
+            </div>
+          </div>
+          <div
+            class="progress-track__icon"
+            [style.left.%]="(currentIndex() / (stages.length - 1)) * 100"
+          >
+            <i class="bi bi-bicycle"></i>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card border-0 shadow-sm mb-3" *ngIf="order">
+      <div class="card-body">
+        <h2 class="h6 mb-3">Delivery details</h2>
+        <div class="row g-3">
+          <div class="col-md-6">
+            <div class="small text-muted">Address</div>
+            <div class="fw-semibold">{{ order.deliveryAddress || 'Not provided' }}</div>
+          </div>
+          <div class="col-md-6">
+            <div class="small text-muted">Driver</div>
+            <div class="fw-semibold">{{ order.riderName || 'Awaiting assignment' }} <span *ngIf="order.riderPhone">· {{ order.riderPhone }}</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card border-0 shadow-sm">
+      <div class="card-body d-flex flex-column flex-md-row align-items-md-center justify-content-between">
+        <div>
+          <div class="fw-semibold mb-1">Need more farm-fresh produce?</div>
+          <div class="text-muted small">Order more and we’ll bundle deliveries when possible.</div>
+        </div>
+        <div class="d-flex gap-2 flex-wrap mt-3 mt-md-0">
+          <a class="btn btn-success" routerLink="/test-history">Order more</a>
+          <a class="btn btn-outline-success" routerLink="/environmen-health">Browse products</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>

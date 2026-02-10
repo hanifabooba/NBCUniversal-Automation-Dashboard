@@ -1,0 +1,56 @@
+<section class="py-5" *ngIf="canAccess(); else unauthorized">
+  <div class="container">
+    <div class="d-flex align-items-center justify-content-between mb-3">
+      <div>
+        <p class="text-uppercase text-success fw-semibold mb-1">Product Loading</p>
+        <h1 class="h4 mb-0">Add products for sale</h1>
+      </div>
+      <button type="button" class="btn btn-outline-secondary btn-sm" (click)="goBack()">
+        <i class="bi bi-arrow-left"></i>
+        Back
+      </button>
+    </div>
+
+    <div class="card">
+      <div class="card-body">
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label">Product name</label>
+            <input class="form-control" [(ngModel)]="form.name" name="name">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Price (GHS)</label>
+            <input class="form-control" type="number" min="0" [(ngModel)]="form.price" name="price">
+          </div>
+          <div class="col-12">
+            <label class="form-label">Description</label>
+            <textarea class="form-control" rows="2" [(ngModel)]="form.shortDescription" name="shortDescription"></textarea>
+          </div>
+          <div class="col-12">
+            <label class="form-label">Product image</label>
+            <input class="form-control" type="file" accept="image/*" (change)="onFileSelected($event)">
+            <small class="text-muted">Upload an image from your device.</small>
+            <div *ngIf="imageName" class="mt-2 small text-muted">Selected: {{ imageName }}</div>
+            <div *ngIf="form.imageUrl" class="mt-2">
+              <img [src]="form.imageUrl" alt="Preview" class="img-fluid rounded" style="max-height: 160px;">
+            </div>
+          </div>
+          <div class="col-12 form-check">
+            <input class="form-check-input" type="checkbox" id="inStock" [(ngModel)]="form.inStock" name="inStock">
+            <label class="form-check-label" for="inStock">In stock</label>
+          </div>
+        </div>
+        <div *ngIf="status" class="alert alert-info mt-3 mb-0">{{ status }}</div>
+        <button class="btn btn-success mt-3" type="button" (click)="submit()">Add product</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<ng-template #unauthorized>
+  <section class="py-5">
+    <div class="container">
+      <div class="alert alert-warning mb-0">You do not have access to load products.</div>
+    </div>
+  </section>
+</ng-template>

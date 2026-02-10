@@ -1,0 +1,62 @@
+<section class="py-5" *ngIf="roles.canManageFulfillment(); else unauthorized">
+  <div class="container">
+    <div class="d-flex align-items-center justify-content-between mb-3">
+      <div>
+        <p class="text-uppercase text-success fw-semibold mb-1">Release board</p>
+        <h1 class="h4 mb-0">Releases update automatically from Execute Test</h1>
+        <small class="text-muted">Release Ticket · QA · Feature · Env · Results</small>
+      </div>
+      <button type="button" class="btn btn-success btn-sm text-white" (click)="goBack()">
+        <i class="bi bi-arrow-left"></i>
+        Back
+      </button>
+    </div>
+
+    <div class="card shadow-sm">
+      <div class="card-body table-responsive">
+        <table class="table table-bordered align-middle">
+          <thead>
+            <tr>
+              <th>Release Ticket</th>
+              <th>QA</th>
+              <th>Feature</th>
+              <th>Env.</th>
+              <th style="width: 15%;">Results</th>
+              <th>Jira</th>
+              <th>Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr *ngIf="!releases().length">
+              <td colspan="8" class="text-center text-muted py-4">No releases yet.</td>
+            </tr>
+            <tr *ngFor="let order of releases(); let i = index" [ngClass]="{ 'table-success': i % 2 === 0 }">
+              <td>#{{ order.id }}</td>
+              <td>{{ order.qa || '—' }}</td>
+              <td>{{ order.feature || '—' }}</td>
+              <td>{{ order.environment || '—' }}</td>
+              <td style="min-width: 140px; white-space: nowrap;">
+                <ng-container *ngIf="order.resultUrl; else noResult">
+                  <a [href]="order.resultUrl" target="_blank" rel="noreferrer" class="link-primary">test-results</a>
+                </ng-container>
+                <ng-template #noResult>—</ng-template>
+              </td>
+              <td>
+                {{ order.jira || '—' }}
+              </td>
+              <td>{{ order.comment || '—' }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<ng-template #unauthorized>
+  <section class="py-5">
+    <div class="container">
+      <div class="alert alert-warning mb-0">You do not have access to the release board.</div>
+    </div>
+  </section>
+</ng-template>

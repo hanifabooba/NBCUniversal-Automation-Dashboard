@@ -1,0 +1,112 @@
+[
+  {
+    "useNaturalConf": true,
+    "startTime": "Nov 24, 2025, 6:45:38 PM",
+    "endTime": "Nov 24, 2025, 6:46:13 PM",
+    "status": "PASS",
+    "level": 0,
+    "isLeaf": true,
+    "name": "TC_070 Verify that the scrubber in seek bar of video sync with the video play. on mobile // [https://www.nbcnewyork.com/] - [Chrome - AndroidRealDevice]",
+    "infoMap": {},
+    "children": [],
+    "logs": [
+      {
+        "timestamp": "Nov 24, 2025, 6:45:56 PM",
+        "status": "INFO",
+        "details": "[Chrome] launched successfully",
+        "seq": 0
+      },
+      {
+        "timestamp": "Nov 24, 2025, 6:46:13 PM",
+        "status": "PASS",
+        "details": "The opened browsers are closed",
+        "seq": 22
+      }
+    ],
+    "media": [],
+    "exceptions": [],
+    "authorSet": [{ "name": "Hanifa" }],
+    "categorySet": [{ "name": "Firefox" }, { "name": "Suite" }, { "name": "NBCProd" }, { "name": "Desktop" }]
+  },
+  {
+    "useNaturalConf": true,
+    "startTime": "Nov 24, 2025, 6:50:04 PM",
+    "endTime": "Nov 24, 2025, 6:50:32 PM",
+    "status": "PASS",
+    "level": 0,
+    "isLeaf": true,
+    "name": "TC_082 Verify that the immersive article layout renders // [https://www.nbcnewyork.com/] - [Chrome - AndroidRealDevice]",
+    "infoMap": {},
+    "children": [],
+    "logs": [
+      {
+        "timestamp": "Nov 24, 2025, 6:50:13 PM",
+        "status": "INFO",
+        "details": "[Chrome] launched successfully",
+        "seq": 0
+      },
+      {
+        "timestamp": "Nov 24, 2025, 6:50:28 PM",
+        "status": "PASS",
+        "details": "Immersive article body is not blank",
+        "seq": 11
+      }
+    ],
+    "authorSet": [{ "name": "Hanifa" }],
+    "categorySet": [{ "name": "Firefox" }, { "name": "Suite" }, { "name": "NBCProd" }, { "name": "Desktop" }]
+  },
+  {
+    "useNaturalConf": true,
+    "startTime": "Nov 24, 2025, 6:59:08 PM",
+    "endTime": "Nov 24, 2025, 6:59:22 PM",
+    "status": "FAIL",
+    "level": 0,
+    "isLeaf": true,
+    "name": "TC_099 Verify that the scrubber in seek bar of video sync with the video play // [https://www.nbcnewyork.com/] - [Chrome - AndroidRealDevice]",
+    "infoMap": {},
+    "children": [],
+    "logs": [
+      {
+        "timestamp": "Nov 24, 2025, 6:59:14 PM",
+        "status": "PASS",
+        "details": "Video overlay clicked to begin playback.",
+        "seq": 3
+      },
+      {
+        "timestamp": "Nov 24, 2025, 6:59:21 PM",
+        "status": "FAIL",
+        "details": "Seek bar is NOT syncing with video play. Initial: 0.0, Final: 0.0",
+        "seq": 5
+      }
+    ],
+    "authorSet": [{ "name": "Hanifa" }],
+    "categorySet": [{ "name": "Firefox" }, { "name": "Suite" }, { "name": "NBCProd" }, { "name": "Desktop" }]
+  },
+  {
+    "useNaturalConf": true,
+    "startTime": "Nov 24, 2025, 7:10:41 PM",
+    "endTime": "Nov 24, 2025, 7:11:03 PM",
+    "status": "PASS",
+    "level": 0,
+    "isLeaf": true,
+    "name": "TC_131 Ensure that weather module is seen below the traffic map",
+    "infoMap": {},
+    "children": [],
+    "logs": [
+      {
+        "timestamp": "Nov 24, 2025, 7:10:55 PM",
+        "status": "PASS",
+        "details": "Driver navigated to new : https://www.nbcnewyork.com/traffic/",
+        "seq": 1
+      },
+      {
+        "timestamp": "Nov 24, 2025, 7:10:58 PM",
+        "status": "PASS",
+        "details": "Weather forecast module is present.",
+        "seq": 5
+      }
+    ],
+    "authorSet": [{ "name": "Hanifa" }],
+    "categorySet": [{ "name": "Traffic" }, { "name": "Mobile" }]
+  }
+]

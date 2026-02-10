@@ -1,0 +1,77 @@
+<section class="admin-bg py-4">
+  <div class="container">
+    <button class="btn btn-outline-success mb-3" type="button" (click)="goBack()">
+      <i class="bi bi-arrow-left"></i>
+      Back
+    </button>
+    <div class="mb-4">
+      <h1 class="h3 text-uppercase text-success fw-bold mb-1">
+        <i class="bi bi-speedometer2 me-2"></i> Manager Control Center
+      </h1>
+      <p class="text-muted mb-0">Track workforce flow, create assignments, and review progress across the fields.</p>
+    </div>
+
+    <div class="row g-4">
+      <div class="col-md-6 col-lg-4">
+        <div class="card admin-card h-100">
+          <div class="card-body">
+            <div class="d-flex align-items-center mb-3">
+              <span class="btn btn-success rounded-circle me-3">
+                <i class="bi bi-clipboard2-check-fill"></i>
+              </span>
+              <div>
+                <h5 class="card-title mb-0">Task Planner</h5>
+                <small class="text-muted">Assign work by employee</small>
+              </div>
+            </div>
+            <p class="card-text">Create, edit, and track job tickets for staff members. Keep every lettuce row and irrigation line on schedule.</p>
+            <a class="btn btn-outline-success btn-sm" routerLink="/manager/tasks">
+              Go to Planner <i class="bi bi-arrow-right-short"></i>
+            </a>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-md-6 col-lg-4">
+        <div class="card admin-card h-100">
+          <div class="card-body">
+            <div class="d-flex align-items-center mb-3">
+              <span class="btn btn-outline-success rounded-circle me-3">
+                <i class="bi bi-check2-square"></i>
+              </span>
+              <div>
+                <h5 class="card-title mb-0">Completed Tasks</h5>
+                <small class="text-muted">Verify field execution</small>
+              </div>
+            </div>
+            <p class="card-text">Review what’s done, when it finished, and which crew completed the job. Export the list for weekly reporting.</p>
+            <a class="btn btn-success btn-sm" routerLink="/manager/completed">
+              Review Progress <i class="bi bi-arrow-right-short"></i>
+            </a>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-md-6 col-lg-4">
+        <div class="card admin-card h-100">
+          <div class="card-body">
+            <div class="d-flex align-items-center mb-3">
+              <span class="btn btn-outline-success rounded-circle me-3">
+                <i class="bi bi-people-fill"></i>
+              </span>
+              <div>
+                <h5 class="card-title mb-0">Team Snapshot</h5>
+                <small class="text-muted">Know who is active</small>
+              </div>
+            </div>
+            <p class="card-text">Monitor who is currently scheduled, ensure coverage by zone, and plan break rotations efficiently.</p>
+            <div class="d-flex gap-2 flex-wrap">
+              <span class="task-chip"><i class="bi bi-person-fill"></i> Demo Employee</span>
+              <span class="task-chip"><i class="bi bi-person-fill"></i> Field Worker 2</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>

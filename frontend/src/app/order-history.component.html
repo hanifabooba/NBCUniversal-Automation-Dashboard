@@ -1,0 +1,90 @@
+<section class="py-5">
+  <div class="container">
+    <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+      <div>
+        <p class="text-uppercase text-success fw-semibold mb-1">Automation weekly status</p>
+        <h1 class="h5 mb-0">All releases</h1>
+      </div>
+      <div class="d-flex align-items-center gap-2 flex-wrap">
+        <div class="input-group input-group-sm" style="min-width: 260px;">
+          <span class="input-group-text bg-white"><i class="bi bi-search"></i></span>
+          <input
+            type="text"
+            class="form-control"
+            placeholder="Search by Jira Ticket Number"
+            [(ngModel)]="searchJira"
+            (keyup.enter)="applySearch()"
+          >
+          <button class="btn btn-outline-secondary" type="button" *ngIf="searchJira" (click)="clearSearch('id')">
+            <i class="bi bi-x-lg"></i>
+          </button>
+          <button class="btn btn-success" type="button" (click)="applySearch()">Search</button>
+        </div>
+        <div class="d-flex align-items-center gap-2">
+          <label class="text-muted small mb-0">Date</label>
+          <div class="input-group input-group-sm">
+            <input type="date" class="form-control form-control-sm" [(ngModel)]="searchDate">
+            <button class="btn btn-outline-secondary" type="button" *ngIf="searchDate" (click)="clearSearch('date')">
+              <i class="bi bi-x-lg"></i>
+            </button>
+          </div>
+        </div>
+        <div class="d-flex align-items-center gap-2">
+          <label class="text-muted small mb-0">QA</label>
+          <div class="input-group input-group-sm">
+            <input type="text" class="form-control form-control-sm" placeholder="QA name" [(ngModel)]="searchDriver" (keyup.enter)="applySearch()">
+            <button class="btn btn-outline-secondary" type="button" *ngIf="searchDriver" (click)="clearSearch('driver')">
+              <i class="bi bi-x-lg"></i>
+            </button>
+          </div>
+        </div>
+        <div class="d-flex align-items-center gap-2">
+          <label class="text-muted small mb-0">Status</label>
+          <select class="form-select form-select-sm" [(ngModel)]="filterStatus">
+            <option value="all">All</option>
+            <option value="created">Created</option>
+            <option value="in-progress">In-progress</option>
+            <option value="done">Done</option>
+          </select>
+        </div>
+        <button type="button" class="btn btn-outline-primary btn-sm" (click)="printPage()">
+          <i class="bi bi-printer"></i>
+          Print
+        </button>
+        <button type="button" class="btn btn-outline-secondary btn-sm" (click)="goBack()">
+          <i class="bi bi-arrow-left"></i>
+          Back
+        </button>
+      </div>
+    </div>
+
+    <div class="table-responsive">
+      <table class="table align-middle order-history-table">
+        <thead>
+          <tr>
+            <th>Jira Ticket</th>
+            <th>Status</th>
+            <th>Created</th>
+            <th>Result Link</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr *ngIf="message">
+            <td colspan="4" class="text-center text-muted">{{ message }}</td>
+          </tr>
+          <tr *ngFor="let order of list">
+            <td>{{ order.jiraTicket || '—' }}</td>
+            <td class="text-uppercase small">{{ mapStatus(order.status) }}</td>
+            <td>{{ order.createdAt | date:'short' }}</td>
+            <td>
+              <ng-container *ngIf="order.resultUrl; else noResult">
+                <a [href]="order.resultUrl" target="_blank" rel="noreferrer">View report</a>
+              </ng-container>
+              <ng-template #noResult>—</ng-template>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>

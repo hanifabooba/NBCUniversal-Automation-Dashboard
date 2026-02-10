@@ -1,0 +1,56 @@
+import { Routes } from '@angular/router';
+import { HomeComponent } from './home.component';
+import { ProductListComponent } from './product-list.component';
+import { EnquiryFormComponent } from './enquiry-form.component';
+import { LoginComponent } from './login.component';
+import { EmployeeDashboardComponent } from './employee-dashboard.component';
+import { EmployeeTasksComponent } from './employee-tasks.component';
+import { ManagerDashboardComponent } from './manager-dashboard.component';
+import { ManagerTasksComponent } from './manager-tasks.component';
+import { ManagerCompletedTasksComponent } from './manager-completed-tasks.component';
+import { SuperAdminComponent } from './super-admin.component';
+import { AboutComponent } from './about.component';
+import { TestHistoryComponent } from './test-history.component';
+import { ExecuteTestComponent } from './executetest.component';
+import { OrderConfirmationComponent } from './order-confirmation.component';
+import { FulfillmentComponent } from './fulfillment.component';
+import { OrderHistoryComponent } from './order-history.component';
+import { OrderFulfillmentBoardComponent } from './order-fulfillment-board.component';
+import { ProductAdminComponent } from './product-admin.component';
+import { OrderTrackingComponent } from './order-tracking.component';
+import { EnquiryBoardComponent } from './enquiry-board.component';
+import { DashboardComponent } from './dashboard.component';
+import { TestResultsComponent } from './test-results.component';
+import { TeamWeeklyTaskComponent } from './team-weekly-task.component';
+
+export const appRoutes: Routes = [
+  { path: '', component: HomeComponent },
+  { path: 'dashboard', component: DashboardComponent },
+  { path: 'environmen-health', component: ProductListComponent },
+  { path: 'products', redirectTo: 'environmen-health' },
+  { path: 'product-admin', component: ProductAdminComponent },
+  { path: 'about', component: AboutComponent },
+  { path: 'test-history', component: TestHistoryComponent },
+  { path: 'order', redirectTo: 'test-history' },
+  { path: 'executetest', component: ExecuteTestComponent },
+  { path: 'cart', redirectTo: 'executetest' },
+  { path: 'order-confirmation/:id', component: OrderConfirmationComponent },
+  { path: 'track/:id', component: OrderTrackingComponent },
+  { path: 'fulfillment', component: FulfillmentComponent },
+  { path: 'releaseboard', component: OrderFulfillmentBoardComponent },
+  { path: 'automation-weekly-status', component: OrderHistoryComponent },
+  { path: 'team-weekly-task', component: TeamWeeklyTaskComponent },
+  { path: 'release-history', redirectTo: 'automation-weekly-status' },
+  { path: 'order-history', redirectTo: 'automation-weekly-status' },
+  { path: 'results', component: TestResultsComponent },
+  { path: 'enquiries', component: EnquiryBoardComponent },
+  { path: 'enquiry/:productSlug', component: EnquiryFormComponent },
+  { path: 'login', component: LoginComponent },
+  { path: 'employee', component: EmployeeDashboardComponent },
+  { path: 'employee/tasks', component: EmployeeTasksComponent },
+  { path: 'manager', component: ManagerDashboardComponent },
+  { path: 'manager/tasks', component: ManagerTasksComponent },
+  { path: 'manager/completed', component: ManagerCompletedTasksComponent },
+  { path: 'super-admin', component: SuperAdminComponent },
+  { path: '**', redirectTo: '' }
+];

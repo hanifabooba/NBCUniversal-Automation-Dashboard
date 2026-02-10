@@ -1,0 +1,92 @@
+<section class="py-4 order-hero">
+  <div class="container">
+    <div class="d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-2 mb-3">
+      <div>
+        <p class="text-uppercase text-success fw-semibold mb-1">Test history</p>
+        <h1 class="h4 fw-bold mb-0">Review and queue test features</h1>
+        <small class="text-muted">Select a feature and prepare it for execution.</small>
+      </div>
+      <div class="d-flex align-items-center gap-2">
+        <a class="btn btn-success btn-sm" routerLink="/executetest">
+          Go to Execute Test
+          <i class="bi bi-arrow-right-short"></i>
+        </a>
+      </div>
+    </div>
+
+    <div class="d-md-none mb-3 order-category-bar">
+      <button
+        type="button"
+        class="btn order-category-pill"
+        *ngFor="let cat of categories"
+        [class.active]="cat.id === selectedCategory()"
+        (click)="selectCategory(cat.id)"
+      >
+        {{ cat.name }}
+      </button>
+    </div>
+
+    <div class="d-flex flex-column flex-md-row gap-3">
+      <aside class="order-categories d-none d-md-block">
+        <div class="card h-100">
+          <div class="card-body">
+            <h2 class="h6 text-uppercase text-muted mb-3">Environments</h2>
+            <div class="list-group list-group-flush">
+              <button
+                type="button"
+                class="list-group-item list-group-item-action"
+                *ngFor="let cat of categories"
+                [class.active]="cat.id === selectedCategory()"
+                (click)="selectCategory(cat.id)"
+              >
+                <div class="fw-semibold">{{ cat.name }}</div>
+                <small class="text-muted">{{ cat.description }}</small>
+              </button>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <div class="flex-fill">
+        <div class="card mb-3 shadow-sm">
+          <div class="card-body">
+            <h2 class="h6 text-uppercase text-muted mb-3">Recent runs</h2>
+            <div class="row g-3">
+              <div class="col-12">
+                <div class="card h-100">
+                  <div class="card-body">
+                    <div class="d-flex align-items-center justify-content-between mb-2">
+                      <div class="fw-semibold">{{ currentCategoryName }}</div>
+                      <span class="badge bg-light text-muted">{{ (runsByEnv[selectedCategory()] || []).length }} runs</span>
+                    </div>
+                    <div *ngIf="runsByEnv[selectedCategory()]?.length; else noRuns" class="d-flex flex-column gap-2">
+                      <div class="border rounded p-2" *ngFor="let run of runsByEnv[selectedCategory()]">
+                        <div class="d-flex justify-content-between align-items-center">
+                          <span class="fw-semibold">Run #{{ run.id }}</span>
+                          <span class="badge" [ngClass]="{
+                            'text-bg-warning': run.status === 'pending' || run.status === 'queued',
+                            'text-bg-info': run.status === 'inprogress' || run.status === 'running',
+                            'text-bg-success': run.status === 'completed',
+                            'text-bg-danger': run.status === 'failure' || run.status === 'failed',
+                            'text-bg-secondary': run.status !== 'pending' && run.status !== 'queued' && run.status !== 'inprogress' && run.status !== 'running' && run.status !== 'completed' && run.status !== 'failure' && run.status !== 'failed'
+                          }">{{ run.status }}</span>
+                        </div>
+                        <div class="small text-muted">{{ run.date }} {{ run.when }} · {{ run.who }}</div>
+                        <div class="small"><strong>Feature:</strong> {{ run.feature }}</div>
+                        <div class="small"><strong>JIRA:</strong> {{ run.jira || '—' }}</div>
+                        <div class="small text-muted"><strong>Comment:</strong> {{ run.comment || '—' }}</div>
+                      </div>
+                    </div>
+                    <ng-template #noRuns>
+                      <div class="text-muted small">No runs yet.</div>
+                    </ng-template>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>

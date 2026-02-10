@@ -1,0 +1,101 @@
+<section class="enquiry-hero">
+  <div class="enquiry-hero__media"></div>
+  <div class="enquiry-hero__content">
+    <a class="btn btn-outline-light btn-sm mb-3" routerLink="/environmen-health">
+      <i class="bi bi-arrow-left"></i>
+      Back to products
+    </a>
+    <p class="text-uppercase text-success fw-semibold mb-2">Product enquiry</p>
+    <h1 class="display-6 fw-bold text-white">Reserve {{ productSlug || 'our organic produce' }}</h1>
+    <p class="text-white-50 mb-0">Tell us what you need and we will connect you to harvest availability.</p>
+  </div>
+</section>
+
+<section class="enquiry-wrapper grid grid-2">
+  <div>
+    <div class="card enquiry-card">
+      <div class="card-body">
+        <h2 class="h4">Tell us about your request</h2>
+        <p class="text-muted mb-4">We respond within 24 hours with pricing and pick-up options.</p>
+        <form *ngIf="!submitted" (ngSubmit)="onSubmit()" class="enquiry-form">
+          <div class="form-field">
+            <label for="name" class="form-label">Name</label>
+            <input class="form-control" id="name" [(ngModel)]="name" name="name" required>
+          </div>
+
+          <div class="form-field">
+            <label for="phone" class="form-label">Phone Number</label>
+            <input class="form-control" id="phone" [(ngModel)]="phone" name="phone" required>
+          </div>
+
+          <div class="form-field">
+            <label for="email" class="form-label">Email (optional)</label>
+            <input class="form-control" id="email" [(ngModel)]="email" name="email" type="email" placeholder="you@example.com">
+          </div>
+
+          <div class="form-field">
+            <label for="question" class="form-label">Your Question</label>
+            <textarea class="form-control" id="question" [(ngModel)]="question" name="question" rows="4" required></textarea>
+          </div>
+
+          <button class="btn btn-success w-100" type="submit" [disabled]="submitting || !name.trim() || !phone.trim() || !question.trim()">
+            <i class="bi bi-send-fill me-2"></i>
+            {{ submitting ? 'Sending...' : 'Submit Enquiry' }}
+          </button>
+          <div *ngIf="error" class="alert alert-warning mt-2 mb-0">{{ error }}</div>
+        </form>
+
+        <div *ngIf="submitted" class="text-center py-4">
+          <i class="bi bi-check-circle-fill text-success fs-1 mb-3"></i>
+          <h2 class="h4">Thank you!</h2>
+          <p>Someone from NBCuniversal Automation Dashboard will reach out to you within 24 hours.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="card enquiry-card">
+      <div class="card-body">
+        <h3 class="h5">Prefer a quick chat?</h3>
+        <p class="text-muted">Tap any channel to start a conversation.</p>
+        <div class="list-group">
+          <a
+            class="list-group-item list-group-item-action d-flex align-items-center gap-3"
+            href="https://wa.me/233000000000"
+            target="_blank"
+          >
+            <span class="contact-icon whatsapp">
+              <i class="bi bi-whatsapp"></i>
+            </span>
+            <div>
+              <div class="fw-semibold">WhatsApp</div>
+              <small>Fastest response — share photos or voice notes.</small>
+            </div>
+          </a>
+          <a class="list-group-item list-group-item-action d-flex align-items-center gap-3" href="https://facebook.com" target="_blank">
+            <span class="contact-icon"><i class="bi bi-facebook"></i></span>
+            <div>
+              <div class="fw-semibold">Facebook</div>
+              <small>Follow our market availability.</small>
+            </div>
+          </a>
+          <a class="list-group-item list-group-item-action d-flex align-items-center gap-3" href="https://instagram.com" target="_blank">
+            <span class="contact-icon"><i class="bi bi-instagram"></i></span>
+            <div>
+              <div class="fw-semibold">Instagram</div>
+              <small>See harvest highlights and reels.</small>
+            </div>
+          </a>
+          <a class="list-group-item list-group-item-action d-flex align-items-center gap-3" href="mailto:info@nbcuniversal.com">
+            <span class="contact-icon email"><i class="bi bi-envelope"></i></span>
+            <div>
+              <div class="fw-semibold">Email</div>
+              <small>Need an invoice or detailed quote? Send us an email.</small>
+            </div>
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>

@@ -1,0 +1,91 @@
+<section class="py-5">
+  <div class="container">
+    <div class="row align-items-center g-4 mb-4">
+      <div class="col-lg-6">
+        <p class="text-uppercase text-success fw-semibold mb-2">About NBCuniversal</p>
+        <h1 class="display-6 fw-bold">From the soil to your table</h1>
+        <p class="text-muted">
+          NBCuniversal Automation Dashboard grows greenhouse and field produce in Greater Accra with a simple goal:
+          nourishing families and partners with clean, flavorful vegetables.
+        </p>
+        <div class="d-flex flex-wrap gap-2 mb-3">
+          <span class="badge-pill text-success bg-success-subtle">Organic greens</span>
+          <span class="badge-pill text-success bg-success-subtle">Farm-to-market</span>
+          <span class="badge-pill text-success bg-success-subtle">Community jobs</span>
+        </div>
+        <div class="d-flex gap-2">
+          <a class="btn btn-success" routerLink="/environmen-health">
+            View produce
+          </a>
+          <a class="btn btn-outline-success" routerLink="/enquiry/tomato">
+            Start an enquiry
+          </a>
+        </div>
+      </div>
+      <div class="col-lg-6">
+        <div class="card admin-card">
+          <div class="card-body">
+            <h2 class="h5 mb-3">What guides us</h2>
+            <div class="row g-3">
+              <div class="col-md-4" *ngFor="let stat of stats">
+                <div class="text-center p-3 border rounded">
+                  <div class="fs-3 fw-bold text-success">{{ stat.value }}</div>
+                  <div class="text-muted small">{{ stat.label }}</div>
+                </div>
+              </div>
+            </div>
+            <hr>
+            <div class="row g-3">
+              <div class="col-md-4" *ngFor="let item of highlights">
+                <h3 class="h6">{{ item.title }}</h3>
+                <p class="text-muted small mb-0">{{ item.description }}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="row g-4">
+      <div class="col-lg-5">
+        <div class="card h-100 enquiry-card">
+          <div class="card-body">
+            <h2 class="h5 mb-2">Our story</h2>
+            <p class="text-muted">
+              We began in a tiny backyard greenhouse, growing enough to put healthy food on our own dining table,
+              working side-by-side with our kids. From those first rows to the early field crew, we kept our focus
+              on clean, chemical-free produce. Today, NBCuniversal delivers consistent organic harvests while training new
+              growers and expanding sustainable irrigation so more families can eat well.
+            </p>
+            <p class="text-muted mb-0">
+              Every crop is tracked by our managers and logged in the same dashboards you see across the app,
+              keeping quality and timelines visible to the entire team.
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="col-lg-7">
+        <div class="card h-100 admin-card">
+          <div class="card-body">
+            <div class="d-flex align-items-center justify-content-between mb-3">
+              <div>
+                <h2 class="h5 mb-0">Meet the crew</h2>
+                <small class="text-muted">Managers, field workers, and logistics working together.</small>
+              </div>
+            </div>
+            <div class="d-flex flex-wrap gap-2">
+              <span class="task-chip"><i class="bi bi-person-fill"></i> Afia · Greenhouse Lead</span>
+              <span class="task-chip"><i class="bi bi-person-fill"></i> Kofi · Logistics</span>
+              <span class="task-chip"><i class="bi bi-person-fill"></i> Abena · Crop Manager</span>
+              <span class="task-chip"><i class="bi bi-person-fill"></i> Demo · Field Crew</span>
+            </div>
+            <div class="alert alert-success-subtle mt-3 mb-0" role="alert">
+              <i class="bi bi-patch-check-fill text-success me-2"></i>
+              We’re proud to hire locally and provide training for seasonal staff.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>

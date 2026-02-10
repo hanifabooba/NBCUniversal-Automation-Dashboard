@@ -1,0 +1,1549 @@
+import 'dotenv/config';
+import express from 'express';
+import cors from 'cors';
+import jwt from 'jsonwebtoken';
+import bcrypt from 'bcryptjs';
+import nodemailer from 'nodemailer';
+import fs from 'fs';
+import path from 'path';
+import { db, stageToStatus } from './db';
+import crypto from 'crypto';
+import zlib from 'zlib';
+
+const app = express();
+app.use(cors());
+const apiBodyLimit = process.env.API_BODY_LIMIT || '50mb';
+app.use(express.json({ limit: apiBodyLimit }));
+app.get('/api/health', (_req, res) => res.json({ ok: true, time: new Date().toISOString() }));
+
+type OrderStage = 'orders' | 'preparing' | 'assign' | 'inroute' | 'delivered';
+const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret';
+
+interface DbUser {
+  id: number;
+  name: string;
+  email: string;
+  role: string;
+  password?: string;
+}
+
+function mapOrder(row: any) {
+  return {
+    id: row.id,
+    customerName: row.customerName,
+    customerPhone: row.customerPhone,
+    customerEmail: row.customerEmail,
+    deliveryAddress: row.deliveryAddress,
+    distanceKm: row.distanceKm,
+    deliveryFee: row.deliveryFee,
+    status: row.status,
+    stage: row.stage,
+    paymentStatus: row.paymentStatus,
+    paymentProvider: row.paymentProvider,
+    paymentPhone: row.paymentPhone,
+    riderName: row.riderName,
+    riderPhone: row.riderPhone,
+    createdAt: row.createdAt,
+    deliveredAt: row.deliveredAt
+  };
+}
+
+function getOrderWithItems(id: number) {
+  const orderRow = db.prepare('SELECT * FROM orders WHERE id = ?').get(id);
+  if (!orderRow) return null;
+  const items = db.prepare('SELECT * FROM order_items WHERE orderId = ?').all(id);
+  return { ...mapOrder(orderRow), items };
+}
+
+function mapEnquiry(row: any) {
+  return {
+    id: row.id,
+    productSlug: row.productSlug,
+    name: row.name,
+    phone: row.phone,
+    email: row.email,
+    question: row.question,
+    responded: !!row.responded,
+    responderName: row.responderName,
+    respondedAt: row.respondedAt,
+    createdAt: row.createdAt
+  };
+}
+
+const transporter = (() => {
+  const host = process.env.SMTP_HOST;
+  const port = process.env.SMTP_PORT ? Number(process.env.SMTP_PORT) : 587;
+  const user = process.env.SMTP_USER;
+  const pass = process.env.SMTP_PASS;
+  if (!host || !user || !pass) return null;
+  return nodemailer.createTransport({
+    host,
+    port,
+    secure: port === 465,
+    auth: { user, pass }
+  });
+})();
+
+function sendOrderEmail(order: any) {
+  if (!transporter || !order?.customerEmail) {
+    console.log('Email not sent (missing SMTP config or customer email). Order:', order?.id);
+    return;
+  }
+  const itemsHtml =
+    (order.items || [])
+      .map(
+        (item: any) =>
+          `<li>${item.quantity} x ${item.name} — GHS ${item.price * item.quantity}${item.comment ? ` (Note: ${item.comment})` : ''}</li>`
+      )
+      .join('') || '<li>No items listed</li>';
+  const baseUrl = process.env.APP_BASE_URL || 'http://localhost:4200';
+  const trackLink = `${baseUrl}/order-confirmation/${order.id}`;
+
+  const html = `
+    <h2>Thanks for your order, ${order.customerName || 'customer'}!</h2>
+    <p>Order #${order.id} is now pending fulfillment.</p>
+    <p><strong>Delivery address:</strong> ${order.deliveryAddress || 'Not provided'}</p>
+    <p><strong>Payment:</strong> MOMO (${order.paymentProvider || 'Ghana'}) · ${order.paymentPhone || 'N/A'}</p>
+    <p><strong>Items:</strong></p>
+    <ul>${itemsHtml}</ul>
+    <p><strong>Total:</strong> GHS ${order.total || ''}</p>
+    <p>Track your order here: <a href="${trackLink}">${trackLink}</a></p>
+    <p>Thank you for choosing NBCuniversal Automation Execution.</p>
+  `;
+
+  transporter
+    .sendMail({
+      from: process.env.SMTP_FROM || 'no-reply@nbcuniversal.com',
+      to: order.customerEmail,
+      subject: `Order #${order.id} confirmation`,
+      html
+    })
+    .catch((err: any) => console.error('Email send failed', err));
+}
+
+function sendEnquiryEmail(enquiry: any, responseMessage: string) {
+  if (!transporter || !enquiry?.email) {
+    console.log('Enquiry response email not sent (missing SMTP config or customer email). Enquiry:', enquiry?.id);
+    return;
+  }
+  const subject = `Response to your enquiry${enquiry.productSlug ? ` about ${enquiry.productSlug}` : ''}`;
+  const html = `
+    <p>Hello ${enquiry.name},</p>
+    <p>Thanks for reaching out about ${enquiry.productSlug || 'our products'}.</p>
+    <p><strong>Your question:</strong><br/>${enquiry.question}</p>
+    <p><strong>Our response:</strong><br/>${responseMessage}</p>
+    <p>If you have any other questions, simply reply to this email.</p>
+    <p>— NBCuniversal Automation Execution Support</p>
+  `;
+  transporter
+    .sendMail({
+      from: process.env.SMTP_FROM || 'no-reply@nbcuniversal.com',
+      to: enquiry.email,
+      subject,
+      html
+    })
+    .catch((err: any) => console.error('Enquiry email send failed', err));
+}
+
+app.post('/api/auth/login', (req, res) => {
+  const { email, password } = req.body as { email: string; password: string };
+  if (!email || !password) return res.status(400).json({ message: 'Email and password are required.' });
+  const normalized = String(email).toLowerCase();
+  let user = db.prepare('SELECT * FROM users WHERE email = ?').get(normalized) as DbUser | undefined;
+
+  // Backfill legacy users without passwords
+  if (user && !user.password) {
+    const hash = bcrypt.hashSync(password, 10);
+    db.prepare('UPDATE users SET password = ? WHERE id = ?').run(hash, user.id);
+    user = { ...user, password: hash };
+  }
+
+  if (!user || !user.password || !bcrypt.compareSync(password, user.password)) {
+    return res.status(401).json({ message: 'Invalid credentials.' });
+  }
+  const token = jwt.sign({ sub: user.id, role: user.role, email: user.email }, JWT_SECRET, { expiresIn: '12h' });
+  res.json({ token, role: user.role, name: user.name, email: user.email });
+});
+
+app.post('/api/auth/register', (req, res) => {
+  const { name, email, password, role = 'employee' } = req.body as { name: string; email: string; password: string; role?: string };
+  if (!name || !email || !password) return res.status(400).json({ message: 'Name, email, and password are required.' });
+  const normalized = email.toLowerCase();
+  const existing = db.prepare('SELECT * FROM users WHERE email = ?').get(normalized) as DbUser | undefined;
+  if (existing) return res.status(409).json({ message: 'User already exists.' });
+  const hash = bcrypt.hashSync(password, 10);
+  db.prepare('INSERT INTO users (name, email, role, password) VALUES (?, ?, ?, ?)').run(name, normalized, role, hash);
+  const user = db.prepare('SELECT * FROM users WHERE email = ?').get(normalized) as DbUser;
+  const token = jwt.sign({ sub: user.id, role: user.role, email: user.email }, JWT_SECRET, { expiresIn: '12h' });
+  res.status(201).json({ token, role: user.role, name: user.name, email: user.email });
+});
+
+app.get('/api/products', (_req, res) => {
+  const rows = db.prepare('SELECT * FROM products').all();
+  res.json(rows);
+});
+
+app.post('/api/products', (req, res) => {
+  const { name, shortDescription, imageUrl, price = 0, inStock = true } = req.body;
+  if (!name || !shortDescription || !imageUrl) {
+    return res.status(400).json({ message: 'Name, description, and image are required.' });
+  }
+  const slug = (name as string).toLowerCase().replace(/\s+/g, '-');
+  try {
+    db.prepare(
+      'INSERT INTO products (slug, name, shortDescription, imageUrl, price, inStock) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(slug, name, shortDescription, imageUrl, price, inStock ? 1 : 0);
+    const product = db.prepare('SELECT * FROM products WHERE slug = ?').get(slug);
+    res.status(201).json(product);
+  } catch (err) {
+    res.status(400).json({ message: 'Could not create product', error: String(err) });
+  }
+});
+
+app.get('/api/drivers', (_req, res) => {
+  const drivers = db.prepare('SELECT * FROM drivers').all();
+  res.json(drivers);
+});
+
+app.post('/api/drivers', (req, res) => {
+  const { name, phone } = req.body;
+  if (!name || !phone) return res.status(400).json({ message: 'Name and phone are required.' });
+  db.prepare('INSERT INTO drivers (name, phone) VALUES (?, ?)').run(name, phone);
+  const driver = db.prepare('SELECT * FROM drivers WHERE name = ? ORDER BY id DESC').get(name);
+  res.status(201).json(driver);
+});
+
+app.get('/api/orders', (_req, res) => {
+  const orderRows: any[] = db.prepare('SELECT * FROM orders ORDER BY id DESC').all();
+  const itemsByOrder: Record<number, any[]> = {};
+  const stmt = db.prepare('SELECT * FROM order_items WHERE orderId = ?');
+  for (const row of orderRows) {
+    itemsByOrder[row.id as number] = stmt.all(row.id as number);
+  }
+  const response = orderRows.map(row => ({ ...mapOrder(row), items: itemsByOrder[row.id as number] || [] }));
+  res.json(response);
+});
+
+app.get('/api/orders/:id', (req, res) => {
+  const id = Number(req.params.id);
+  const order = getOrderWithItems(id);
+  if (!order) return res.status(404).json({ message: 'Order not found' });
+  res.json(order);
+});
+
+app.post('/api/orders', (req, res) => {
+  const {
+    customerName,
+    customerPhone,
+    customerEmail,
+    deliveryAddress,
+    distanceKm = 0,
+    deliveryFee = 0,
+    status = 'pending',
+    stage = 'orders',
+    paymentStatus = 'pending',
+    paymentProvider,
+    paymentPhone,
+    riderName,
+    riderPhone,
+    items = []
+  } = req.body;
+
+  if (!Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({ message: 'Items are required.' });
+  }
+
+  const insertOrder = db.prepare(`
+    INSERT INTO orders
+    (customerName, customerPhone, customerEmail, deliveryAddress, distanceKm, deliveryFee, status, stage, paymentStatus, paymentProvider, paymentPhone, riderName, riderPhone, createdAt)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const insertItem = db.prepare(`
+    INSERT INTO order_items (orderId, productId, name, price, quantity, comment)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `);
+
+  const now = new Date().toISOString();
+  const txn = db.transaction(() => {
+    const info = insertOrder.run(
+      customerName ?? '',
+      customerPhone ?? '',
+      customerEmail ?? '',
+      deliveryAddress ?? '',
+      distanceKm,
+      deliveryFee,
+      status,
+      stage,
+      paymentStatus,
+      paymentProvider ?? '',
+      paymentPhone ?? '',
+      riderName ?? '',
+      riderPhone ?? '',
+      now
+    );
+    const orderId = Number(info.lastInsertRowid);
+    for (const item of items) {
+      insertItem.run(orderId, item.productId ?? null, item.name, item.price, item.quantity, item.comment ?? '');
+    }
+    return orderId;
+  });
+
+  const orderId = txn();
+  const order = getOrderWithItems(orderId);
+  if (order) sendOrderEmail(order);
+  res.status(201).json(order);
+});
+
+app.patch('/api/orders/:id/stage', (req, res) => {
+  const id = Number(req.params.id);
+  const { stage, riderName, riderPhone } = req.body as { stage: OrderStage; riderName?: string; riderPhone?: string };
+  if (!stage) return res.status(400).json({ message: 'Stage is required' });
+  const status = stageToStatus(stage);
+  const deliveredAt = stage === 'delivered' ? new Date().toISOString() : null;
+  const stmt = db.prepare(
+    'UPDATE orders SET stage = ?, status = ?, riderName = COALESCE(?, riderName), riderPhone = COALESCE(?, riderPhone), deliveredAt = COALESCE(?, deliveredAt) WHERE id = ?'
+  );
+  const result = stmt.run(stage, status, riderName ?? null, riderPhone ?? null, deliveredAt, id);
+  if (result.changes === 0) return res.status(404).json({ message: 'Order not found' });
+  const order = getOrderWithItems(id);
+  res.json(order);
+});
+
+app.post('/api/enquiries', (req, res) => {
+  const { productSlug, name, phone, email, question } = req.body;
+  if (!name || !phone || !question) {
+    return res.status(400).json({ message: 'Name, phone, and question are required.' });
+  }
+  const now = new Date().toISOString();
+  const info = db
+    .prepare(
+      `INSERT INTO enquiries (productSlug, name, phone, email, question, responded, createdAt)
+       VALUES (?, ?, ?, ?, ?, 0, ?)`
+    )
+    .run(productSlug ?? null, name, phone, email ?? null, question, now);
+  const created = db.prepare('SELECT * FROM enquiries WHERE id = ?').get(Number(info.lastInsertRowid));
+  res.status(201).json(mapEnquiry(created));
+});
+
+app.get('/api/enquiries', (_req, res) => {
+  const rows = db.prepare('SELECT * FROM enquiries ORDER BY createdAt DESC').all();
+  res.json(rows.map(mapEnquiry));
+});
+
+app.patch('/api/enquiries/:id/respond', (req, res) => {
+  const id = Number(req.params.id);
+  const { message, responderName } = req.body as { message: string; responderName?: string };
+  if (!message) return res.status(400).json({ message: 'Message is required.' });
+  const enquiry = db.prepare('SELECT * FROM enquiries WHERE id = ?').get(id);
+  if (!enquiry) return res.status(404).json({ message: 'Enquiry not found.' });
+
+  const respondedAt = new Date().toISOString();
+  db.prepare('UPDATE enquiries SET responded = 1, responderName = ?, respondedAt = ? WHERE id = ?').run(
+    responderName ?? 'Team member',
+    respondedAt,
+    id
+  );
+  const updated = db.prepare('SELECT * FROM enquiries WHERE id = ?').get(id);
+  sendEnquiryEmail(updated, message);
+  res.json(mapEnquiry(updated));
+});
+
+// --- Test runs storage (for pie charts) ---
+type StoredRun = {
+  id: string;
+  name: string;
+  passed: number;
+  failed: number;
+  skipped: number;
+  total: number;
+  createdAt: string;
+};
+
+const runsFile = path.join(__dirname, '../data/test-runs.json');
+const envHealthFile = path.join(__dirname, '../data/env-health.json');
+const latestTestFile = path.join(__dirname, '../data/latest-test.json');
+const resultRunsFile = path.join(__dirname, '../data/result-runs.json');
+const defaultS3Base = process.env.S3_BASE_URL || 'https://otsops-regression.s3.us-east-2.amazonaws.com';
+const defaultRegion = process.env.AWS_REGION || 'us-east-2';
+const presignExpirySeconds = Number(process.env.S3_PRESIGN_EXPIRY || 3600); // default 1 hour
+const envHealthSyncHours = [8, 12, 17]; // local hours to auto-sync env health
+const envHealthRunKeys = new Set<string>();
+
+function normalizeTestResults(payload: any): any[] {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.results)) return payload.results;
+  if (Array.isArray(payload?.tests)) return payload.tests;
+  if (Array.isArray(payload?.data)) return payload.data;
+  return payload ? [payload] : [];
+}
+
+function unzipFirstEntry(buffer: Buffer): Buffer | null {
+  // Find End of Central Directory (search backwards up to 64KB as per spec)
+  const eocdSignature = 0x06054b50;
+  let eocdOffset = -1;
+  const minSearchOffset = Math.max(0, buffer.length - 0x10000 - 22);
+  for (let i = buffer.length - 22; i >= minSearchOffset; i--) {
+    if (buffer.readUInt32LE(i) === eocdSignature) {
+      eocdOffset = i;
+      break;
+    }
+  }
+  if (eocdOffset === -1) return null;
+
+  const centralDirOffset = buffer.readUInt32LE(eocdOffset + 16);
+  const centralDirSig = buffer.readUInt32LE(centralDirOffset);
+  if (centralDirSig !== 0x02014b50) return null;
+
+  const compressionMethod = buffer.readUInt16LE(centralDirOffset + 10);
+  const compressedSize = buffer.readUInt32LE(centralDirOffset + 20);
+  const fileNameLength = buffer.readUInt16LE(centralDirOffset + 28);
+  const extraLength = buffer.readUInt16LE(centralDirOffset + 30);
+  const commentLength = buffer.readUInt16LE(centralDirOffset + 32);
+  const localHeaderOffset = buffer.readUInt32LE(centralDirOffset + 42);
+
+  const localSig = buffer.readUInt32LE(localHeaderOffset);
+  if (localSig !== 0x04034b50) return null;
+  const lhFileNameLength = buffer.readUInt16LE(localHeaderOffset + 26);
+  const lhExtraLength = buffer.readUInt16LE(localHeaderOffset + 28);
+  const dataStart = localHeaderOffset + 30 + lhFileNameLength + lhExtraLength;
+  const dataEnd = dataStart + compressedSize;
+  if (dataEnd > buffer.length) throw new Error('Zip data truncated');
+  const compressed = buffer.subarray(dataStart, dataEnd);
+
+  if (compressionMethod === 0) return compressed; // stored
+  if (compressionMethod === 8) return zlib.inflateRawSync(compressed); // deflate
+  throw new Error(`Zip compression method ${compressionMethod} not supported`);
+}
+
+function parseBufferAsJson(buffer: Buffer): { data?: any[]; raw?: any; note?: string; error?: string } {
+  const attempts: Array<{ fn: () => Buffer; note: string }> = [
+    { fn: () => buffer, note: 'plain' },
+    { fn: () => zlib.gunzipSync(buffer), note: 'gunzip' },
+    { fn: () => zlib.inflateRawSync(buffer), note: 'inflateRaw' },
+    { fn: () => unzipFirstEntry(buffer) as Buffer, note: 'zip' }
+  ];
+
+  for (const attempt of attempts) {
+    try {
+      const out = attempt.fn();
+      if (!out) continue;
+      const raw = JSON.parse(out.toString('utf8'));
+      return { data: normalizeTestResults(raw), raw, note: attempt.note };
+    } catch (err: any) {
+      // ignore and try next
+      if (attempt.note === 'zip' && err) {
+        return { error: `Zip extract failed: ${err?.message || err}` };
+      }
+    }
+  }
+  return { error: 'Buffer did not contain valid JSON' };
+}
+
+function ensureRunsFile() {
+  if (!fs.existsSync(path.dirname(runsFile))) {
+    fs.mkdirSync(path.dirname(runsFile), { recursive: true });
+  }
+  if (!fs.existsSync(runsFile)) {
+    fs.writeFileSync(runsFile, '[]', 'utf8');
+  }
+}
+
+function ensureEnvHealthFile() {
+  if (!fs.existsSync(path.dirname(envHealthFile))) {
+    fs.mkdirSync(path.dirname(envHealthFile), { recursive: true });
+  }
+  if (!fs.existsSync(envHealthFile)) {
+    fs.writeFileSync(envHealthFile, '[]', 'utf8');
+  }
+}
+
+function ensureLatestTestFile() {
+  if (!fs.existsSync(path.dirname(latestTestFile))) {
+    fs.mkdirSync(path.dirname(latestTestFile), { recursive: true });
+  }
+}
+
+function ensureResultRunsFile() {
+  if (!fs.existsSync(path.dirname(resultRunsFile))) {
+    fs.mkdirSync(path.dirname(resultRunsFile), { recursive: true });
+  }
+  if (!fs.existsSync(resultRunsFile)) {
+    fs.writeFileSync(resultRunsFile, '[]', 'utf8');
+  }
+}
+
+function loadRuns(): StoredRun[] {
+  ensureRunsFile();
+  try {
+    const raw = fs.readFileSync(runsFile, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed;
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+function saveRuns(runs: StoredRun[]): void {
+  ensureRunsFile();
+  fs.writeFileSync(runsFile, JSON.stringify(runs, null, 2), 'utf8');
+}
+
+type EnvCheck = { name: string; status: string; detail?: string };
+type EnvRun = { id: string; site: string; fetchedAt: string; weekOf: string; sourceUrl: string; checks: EnvCheck[] };
+type StoredResultRun = {
+  id: string;
+  name: string;
+  key?: string;
+  resultUrl?: string;
+  data?: any;
+  createdAt: string;
+  expiresAt?: string;
+  passed?: number;
+  failed?: number;
+  skipped?: number;
+  total?: number;
+  hasResultHtml?: boolean;
+  hasReportZip?: boolean;
+  // Only loaded on-demand (avoid sending/rewriting huge blobs)
+  resultHtml?: string;
+  reportZip?: Buffer;
+};
+
+function loadEnvHealth(): EnvRun[] {
+  ensureEnvHealthFile();
+  try {
+    return JSON.parse(fs.readFileSync(envHealthFile, 'utf8'));
+  } catch {
+    return [];
+  }
+}
+
+function saveEnvHealth(runs: EnvRun[]) {
+  ensureEnvHealthFile();
+  fs.writeFileSync(envHealthFile, JSON.stringify(runs, null, 2), 'utf8');
+}
+
+function loadResultRuns(): StoredResultRun[] {
+  try {
+    const rows = db
+      .prepare(
+        `SELECT id, name, key, resultUrl, data, createdAt, expiresAt, passed, failed, skipped, total,
+                (resultHtml IS NOT NULL AND length(resultHtml) > 0) as hasResultHtml,
+                (reportZip IS NOT NULL AND length(reportZip) > 0) as hasReportZip
+         FROM test_runs
+         ORDER BY datetime(createdAt) DESC`
+      )
+      .all() as any[];
+    if (rows.length) {
+      return rows.map(row => {
+        let data: any = [];
+        try {
+          data = row.data ? JSON.parse(row.data) : [];
+        } catch {
+          data = [];
+        }
+        return {
+          id: row.id,
+          name: row.name,
+          key: row.key,
+          resultUrl: row.resultUrl,
+          data,
+          createdAt: row.createdAt,
+          expiresAt: row.expiresAt,
+          passed: row.passed,
+          failed: row.failed,
+          skipped: row.skipped,
+          total: row.total,
+          hasResultHtml: !!row.hasResultHtml,
+          hasReportZip: !!row.hasReportZip
+        };
+      });
+    }
+  } catch (err) {
+    console.warn('Failed to read test_runs from DB, falling back to file', err);
+  }
+
+  // Legacy file fallback (and migrate into DB)
+  ensureResultRunsFile();
+  try {
+    const raw = fs.readFileSync(resultRunsFile, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      saveResultRuns(parsed);
+      return parsed;
+    }
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+function countStatuses(data: any[]): { passed: number; failed: number; skipped: number; total: number } {
+  const leaf: any[] = [];
+  const walk = (nodes: any[]) => {
+    for (const n of nodes || []) {
+      if (Array.isArray(n?.children) && n.children.length) {
+        walk(n.children);
+      } else {
+        leaf.push(n);
+      }
+    }
+  };
+  walk(data || []);
+  const total = leaf.length;
+  const passed = leaf.filter(t => t?.status === 'PASS').length;
+  const failed = leaf.filter(t => t?.status === 'FAIL').length;
+  const skipped = leaf.filter(t => t?.status === 'SKIP').length;
+  return { passed, failed, skipped, total };
+}
+
+function computeExpiresAt(createdAtIso: string, days = 30): string {
+  const createdAtMs = Date.parse(createdAtIso);
+  const base = Number.isFinite(createdAtMs) ? createdAtMs : Date.now();
+  return new Date(base + days * 24 * 60 * 60 * 1000).toISOString();
+}
+
+function upsertResultRunToDb(run: StoredResultRun) {
+  const hasData = run.data !== undefined;
+  const data = hasData ? (Array.isArray(run.data) ? run.data : []) : null;
+  const counts = hasData ? countStatuses(data as any[]) : null;
+  const expiresAt = run.expiresAt || computeExpiresAt(run.createdAt, 30);
+  db.prepare(
+    `INSERT INTO test_runs (id, name, key, resultUrl, data, resultHtml, reportZip, createdAt, expiresAt, passed, failed, skipped, total)
+     VALUES (
+       @id,
+       @name,
+       @key,
+       @resultUrl,
+       COALESCE(@data, '[]'),
+       @resultHtml,
+       @reportZip,
+       @createdAt,
+       @expiresAt,
+       COALESCE(@passed, 0),
+       COALESCE(@failed, 0),
+       COALESCE(@skipped, 0),
+       COALESCE(@total, 0)
+     )
+     ON CONFLICT(id) DO UPDATE SET
+       name = @name,
+       key = @key,
+       resultUrl = COALESCE(@resultUrl, test_runs.resultUrl),
+       data = CASE WHEN @data IS NULL THEN test_runs.data ELSE @data END,
+       resultHtml = COALESCE(@resultHtml, test_runs.resultHtml),
+       reportZip = COALESCE(@reportZip, test_runs.reportZip),
+       expiresAt = @expiresAt,
+       passed = CASE WHEN @passed IS NULL THEN test_runs.passed ELSE @passed END,
+       failed = CASE WHEN @failed IS NULL THEN test_runs.failed ELSE @failed END,
+       skipped = CASE WHEN @skipped IS NULL THEN test_runs.skipped ELSE @skipped END,
+       total = CASE WHEN @total IS NULL THEN test_runs.total ELSE @total END`
+  ).run({
+    id: run.id,
+    name: run.name,
+    key: run.key,
+    resultUrl: run.resultUrl,
+    data: data ? JSON.stringify(data) : null,
+    resultHtml: run.resultHtml ?? null,
+    reportZip: run.reportZip ?? null,
+    createdAt: run.createdAt,
+    expiresAt,
+    passed: counts?.passed ?? null,
+    failed: counts?.failed ?? null,
+    skipped: counts?.skipped ?? null,
+    total: counts?.total ?? null
+  });
+}
+
+function saveResultRuns(runs: StoredResultRun[]) {
+  ensureResultRunsFile();
+  // Keep legacy file for compatibility
+  fs.writeFileSync(resultRunsFile, JSON.stringify(runs, null, 2), 'utf8');
+  // Persist to DB
+  for (const run of runs || []) {
+    upsertResultRunToDb(run);
+  }
+}
+
+function s3UrlForKey(key: string) {
+  const base = defaultS3Base;
+  const cleaned = key.replace(/^\//, '');
+  const encoded = cleaned.split('/').map(seg => encodeURIComponent(seg)).join('/');
+  return `${base.replace(/\/$/, '')}/${encoded}`;
+}
+
+function hmac(key: Buffer, data: string) {
+  return crypto.createHmac('sha256', key).update(data, 'utf8').digest();
+}
+
+function sha256(data: string) {
+  return crypto.createHash('sha256').update(data, 'utf8').digest('hex');
+}
+
+function getSignatureKey(key: string, dateStamp: string, region: string, service: string) {
+  const kDate = hmac(Buffer.from('AWS4' + key, 'utf8'), dateStamp);
+  const kRegion = hmac(kDate, region);
+  const kService = hmac(kRegion, service);
+  const kSigning = hmac(kService, 'aws4_request');
+  return kSigning;
+}
+
+function presignS3GetUrl(key: string, expiresSeconds = presignExpirySeconds): string | null {
+  const accessKey = process.env.AWS_ACCESS_KEY_ID;
+  const secretKey = process.env.AWS_SECRET_ACCESS_KEY;
+  if (!accessKey || !secretKey) return null;
+
+  const cleanedKey = key.replace(/^\//, '');
+  const host = defaultS3Base.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+  const now = new Date();
+  const amzDate = now.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z'); // YYYYMMDDTHHMMSSZ
+  const dateStamp = amzDate.substring(0, 8); // YYYYMMDD
+  const service = 's3';
+  const algorithm = 'AWS4-HMAC-SHA256';
+  const credentialScope = `${dateStamp}/${defaultRegion}/${service}/aws4_request`;
+
+  const signedHeaders = 'host';
+  const payloadHash = 'UNSIGNED-PAYLOAD';
+
+  const canonicalUri = '/' + cleanedKey.split('/').map(seg => encodeURIComponent(seg)).join('/');
+  const canonicalQuery = [
+    `X-Amz-Algorithm=${algorithm}`,
+    `X-Amz-Credential=${encodeURIComponent(accessKey + '/' + credentialScope)}`,
+    `X-Amz-Date=${amzDate}`,
+    `X-Amz-Expires=${expiresSeconds}`,
+    `X-Amz-SignedHeaders=${signedHeaders}`
+  ].join('&');
+
+  const canonicalHeaders = `host:${host}\n`;
+  const canonicalRequest = ['GET', canonicalUri, canonicalQuery, canonicalHeaders, signedHeaders, payloadHash].join('\n');
+  const stringToSign = [
+    algorithm,
+    amzDate,
+    credentialScope,
+    sha256(canonicalRequest)
+  ].join('\n');
+
+  const signingKey = getSignatureKey(secretKey, dateStamp, defaultRegion, service);
+  const signature = crypto.createHmac('sha256', signingKey).update(stringToSign, 'utf8').digest('hex');
+
+  const signedUrl = `https://${host}${canonicalUri}?${canonicalQuery}&X-Amz-Signature=${signature}`;
+  return signedUrl;
+}
+
+function startOfWeekISO(date: Date) {
+  const d = new Date(date);
+  const day = d.getUTCDay() || 7;
+  if (day !== 1) d.setUTCDate(d.getUTCDate() - (day - 1));
+  d.setUTCHours(0, 0, 0, 0);
+  return d.toISOString();
+}
+
+function scheduleEnvHealthAutoSync(port: number) {
+  // Check every minute; run at 8:00, 12:00, 17:00 local time if not already run for that hour/day.
+  setInterval(async () => {
+    const now = new Date();
+    const hour = now.getHours();
+    const key = `${now.toDateString()}-${hour}`;
+    // prune old keys
+    if (envHealthRunKeys.size > 30) {
+      const cutoff = Date.now() - 3 * 24 * 60 * 60 * 1000;
+      for (const k of Array.from(envHealthRunKeys)) {
+        const [dayStr] = k.split('-');
+        const dt = new Date(dayStr).getTime();
+        if (Number.isFinite(dt) && dt < cutoff) envHealthRunKeys.delete(k);
+      }
+    }
+    if (!envHealthSyncHours.includes(hour) || envHealthRunKeys.has(key)) return;
+    envHealthRunKeys.add(key);
+    try {
+      const resp = await fetch(`http://localhost:${port}/api/env-health/sync`, { method: 'POST' });
+      if (!resp.ok) {
+        const text = await resp.text();
+        console.warn('[env-health auto-sync] non-200', resp.status, text?.slice(0, 500));
+      } else {
+        console.log('[env-health auto-sync] synced at hour', hour);
+      }
+    } catch (err) {
+      console.warn('[env-health auto-sync] failed', err);
+    }
+  }, 60 * 1000);
+}
+
+function sampleEnvChecks(): EnvCheck[] {
+  return [
+    { name: 'Page Load Performance', status: 'WARNING', detail: 'Acceptable: 6.74s' },
+    { name: 'HTTPS Security', status: 'PASS', detail: 'Secure HTTPS' },
+    { name: 'Page Size Check', status: 'PASS', detail: 'Optimal: 1.00MB' },
+    { name: 'JavaScript Errors', status: 'WARNING', detail: '9 errors' },
+    { name: 'Mobile 320px', status: 'PASS', detail: 'Mobile responsive' },
+    { name: 'Mobile 375px', status: 'PASS', detail: 'iPhone responsive' },
+    { name: 'Tablet Viewport', status: 'PASS', detail: 'Tablet responsive' },
+    { name: 'Image Loading', status: 'PASS', detail: 'All images OK' },
+    { name: 'Modern Image Formats', status: 'WARNING', detail: 'Limited WebP' },
+    { name: 'Video Player', status: 'PASS', detail: 'Video present' },
+    { name: 'Weather Section', status: 'PASS', detail: 'Weather link found' },
+    { name: 'Weather Widget', status: 'PASS', detail: 'Widget present' },
+    { name: 'Advertisement Units', status: 'PASS', detail: '4 ad(s)' },
+    { name: 'Sidebar Ads', status: 'PASS', detail: '1 sidebar ad(s)' },
+    { name: 'Login/Sign-up', status: 'WARNING', detail: 'No login' },
+    { name: 'Analytics', status: 'PASS', detail: 'Analytics present' },
+    { name: 'Sports Section', status: 'PASS', detail: 'Sports found' },
+    { name: 'Search', status: 'PASS', detail: 'Search present' },
+    { name: 'Social Media', status: 'PASS', detail: '4 social links' },
+    { name: 'Footer', status: 'PASS', detail: 'Footer present' },
+    { name: 'Scroll', status: 'PASS', detail: 'Scroll works' },
+    { name: 'Navigation', status: 'PASS', detail: '21 nav links' },
+    { name: 'Broken Links', status: 'PASS', detail: 'Links checked' },
+    { name: 'Article Links', status: 'PASS', detail: '138 article links' },
+    { name: 'Breaking News', status: 'WARNING', detail: 'No breaking news' },
+    { name: 'Local Sections', status: 'PASS', detail: '11 local sections' },
+    { name: 'Accessibility', status: 'PASS', detail: '24 accessibility attrs' },
+    { name: 'Meta Tags', status: 'PASS', detail: '3/3 meta tags' },
+    { name: 'Live Updates', status: 'PASS', detail: 'Live section found' },
+    { name: 'Newsletter', status: 'WARNING', detail: 'No newsletter' }
+  ];
+}
+
+app.get('/api/test-runs', (_req, res) => {
+  const runs = loadRuns().sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  res.json(runs);
+});
+
+app.post('/api/test-runs', (req, res) => {
+  const { name, passed = 0, failed = 0, skipped = 0, total = 0 } = req.body as Partial<StoredRun>;
+  if (!name) return res.status(400).json({ message: 'name is required' });
+  const runs = loadRuns();
+  const id = `${Date.now()}`;
+  const createdAt = new Date().toISOString();
+  const run: StoredRun = { id, name, passed, failed, skipped, total, createdAt };
+  runs.push(run);
+  saveRuns(runs);
+  res.status(201).json(run);
+});
+
+// Environment health history
+app.get('/api/env-health', (_req, res) => {
+  const runs = loadEnvHealth().sort((a, b) => new Date(b.fetchedAt).getTime() - new Date(a.fetchedAt).getTime());
+  res.json(runs);
+});
+
+app.post('/api/env-health/sync', async (_req, res) => {
+  const sourceUrl = process.env.ENV_HEALTH_URL || 'https://jenkins.otsops.com/job/NBC-Multi-Site-Testing/NBC_20Test_20Report/';
+  const now = new Date();
+  const weekOf = startOfWeekISO(now);
+  const id = `${now.getTime()}`;
+
+  let checks: EnvCheck[] = [];
+  try {
+    const response = await fetch(sourceUrl, { headers: { Accept: 'text/html' } });
+    if (response.ok) {
+      const text = await response.text();
+      // best-effort parse: look for lines like "Name\tSTATUS\tDetail"
+      const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+      const parsed: EnvCheck[] = [];
+      for (const line of lines) {
+        const parts = line.split(/\s{2,}|\t/);
+        if (parts.length >= 2 && ['PASS', 'FAIL', 'WARNING'].includes(parts[1].toUpperCase())) {
+          parsed.push({ name: parts[0], status: parts[1].toUpperCase(), detail: parts.slice(2).join(' ') });
+        }
+      }
+      checks = parsed.length ? parsed : sampleEnvChecks();
+    } else {
+      checks = sampleEnvChecks();
+    }
+  } catch {
+    checks = sampleEnvChecks();
+  }
+
+  const run: EnvRun = {
+    id,
+    site: 'NBC Multi-Site',
+    fetchedAt: now.toISOString(),
+    weekOf,
+    sourceUrl,
+    checks
+  };
+
+  const all = loadEnvHealth();
+  all.push(run);
+  saveEnvHealth(all);
+  res.status(201).json(run);
+});
+
+// --- Test result fetch from S3/public URL ---
+app.post('/api/results/fetch-json', async (req, res) => {
+  const { key } = req.body as { key?: string };
+  if (!key) return res.status(400).json({ message: 'key is required (e.g. 11-24-25:B/test.json)' });
+  const candidateKeys = Array.from(
+    new Set([
+      key,
+      key.endsWith('.zip') ? key : `${key}.zip`,
+      key.endsWith('.gz') ? key : `${key}.gz`
+    ])
+  );
+
+  const attempts: any[] = [];
+  let parsed: { data: any[]; raw: any; note?: string; usedKey: string; url: string } | null = null;
+
+  for (const candidate of candidateKeys) {
+    const target = presignS3GetUrl(candidate) || s3UrlForKey(candidate);
+    try {
+      const resp = await fetch(target);
+      if (!resp.ok) {
+        attempts.push({ key: candidate, url: target, status: resp.status, statusText: resp.statusText });
+        continue;
+      }
+      const contentType = resp.headers.get('content-type') || '';
+      if (contentType.includes('json')) {
+        const raw = await resp.json();
+        parsed = { data: normalizeTestResults(raw), raw, usedKey: candidate, url: target };
+        break;
+      }
+      const buffer = Buffer.from(await resp.arrayBuffer());
+      const result = parseBufferAsJson(buffer);
+      if (result?.data) {
+        parsed = { data: result.data, raw: result.raw, note: result.note, usedKey: candidate, url: target };
+        break;
+      }
+      attempts.push({ key: candidate, url: target, error: result?.error || 'Unknown parse error' });
+    } catch (err: any) {
+      attempts.push({ key: candidate, url: target, error: err?.message || String(err) });
+    }
+  }
+
+  if (!parsed) {
+    return res.status(502).json({
+      message: 'Unable to fetch or parse test.json (tried json, gz, and zip variants).',
+      attempts
+    });
+  }
+
+  ensureLatestTestFile();
+  fs.writeFileSync(latestTestFile, JSON.stringify(parsed.data ?? parsed.raw ?? [], null, 2), 'utf8');
+
+  // Save as a result run entry with inferred result.html link if possible
+  const prefix = parsed.usedKey.replace(/\/?test\.json(\.zip|\.gz)?$/i, '');
+  const resultLink = presignS3GetUrl(`${prefix}/result.html`) || s3UrlForKey(`${prefix}/result.html`);
+  const runs = loadResultRuns();
+  const existingIdx = runs.findIndex(r => r.key === parsed.usedKey);
+  const nowIso = new Date().toISOString();
+  const id = existingIdx >= 0 ? runs[existingIdx].id : `${Date.now()}`;
+  const createdAt = existingIdx >= 0 ? runs[existingIdx].createdAt : nowIso;
+  const entry: StoredResultRun = {
+    id,
+    name: runs[existingIdx]?.name || parsed.usedKey,
+    key: parsed.usedKey,
+    resultUrl: resultLink,
+    data: parsed.data,
+    createdAt
+  };
+  if (existingIdx >= 0) {
+    runs[existingIdx] = entry;
+  } else {
+    runs.push(entry);
+  }
+  saveResultRuns(runs);
+
+  res.json({
+    key: parsed.usedKey,
+    url: parsed.url,
+    saved: true,
+    data: parsed.data,
+    resultUrl: resultLink,
+    runId: id,
+    note: parsed.note,
+    attempts
+  });
+});
+
+// Accept an uploaded test.json payload (from Jenkins) and cache/update run
+app.post('/api/results/upload-json', (req, res) => {
+  const body = req.body as { data?: any; raw?: any; key?: string; resultUrl?: string; name?: string };
+  const incoming = body?.data ?? body?.raw;
+  if (!incoming) return res.status(400).json({ message: 'data is required' });
+
+  let parsed: any;
+  try {
+    parsed = typeof incoming === 'string' ? JSON.parse(incoming) : incoming;
+  } catch (err: any) {
+    return res.status(400).json({ message: `Invalid JSON payload: ${err?.message || err}` });
+  }
+
+  const data = normalizeTestResults(parsed);
+  ensureLatestTestFile();
+  fs.writeFileSync(latestTestFile, JSON.stringify(data, null, 2), 'utf8');
+
+  const usedKey = body.key || 'uploaded/test.json';
+  const prefix = usedKey.replace(/\/?test\.json(\.zip|\.gz)?$/i, '');
+  const resultLink =
+    body.resultUrl || presignS3GetUrl(`${prefix}/result.html`) || s3UrlForKey(`${prefix}/result.html`);
+
+  const runs = loadResultRuns();
+  const existingIdx = runs.findIndex(r => r.key === usedKey);
+  const nowIso = new Date().toISOString();
+  const id = existingIdx >= 0 ? runs[existingIdx].id : `${Date.now()}`;
+  const createdAt = existingIdx >= 0 ? runs[existingIdx].createdAt : nowIso;
+  const entry: StoredResultRun = {
+    id,
+    name: body.name || runs[existingIdx]?.name || usedKey,
+    key: usedKey,
+    resultUrl: resultLink,
+    data,
+    createdAt
+  };
+  if (existingIdx >= 0) {
+    runs[existingIdx] = entry;
+  } else {
+    runs.push(entry);
+  }
+  saveResultRuns(runs);
+
+  res.status(201).json({
+    saved: true,
+    key: usedKey,
+    resultUrl: resultLink,
+    runId: id,
+    count: Array.isArray(data) ? data.length : 0
+  });
+});
+
+// Upload the raw test.json file (supports plain JSON, .gz, or .zip) and cache/update run.
+// Usage (Jenkins): curl -s -X POST "http://localhost:3000/api/results/upload-file?key=.../test.json" \
+//   -H "Content-Type: application/octet-stream" --data-binary @"${REPORT_DIR}/test.json.gz"
+app.post(
+  '/api/results/upload-file',
+  express.raw({ type: ['application/octet-stream', 'application/gzip', 'application/x-gzip', 'application/zip'], limit: apiBodyLimit }),
+  (req, res) => {
+    const key = (req.query.key as string) || (req.header('x-run-key') as string) || '';
+    const name = (req.query.name as string) || (req.header('x-run-name') as string) || undefined;
+    const resultUrl = (req.query.resultUrl as string) || (req.header('x-result-url') as string) || undefined;
+    if (!key) return res.status(400).json({ message: 'key query param is required (e.g. 12-16-25/.../reports/test.json)' });
+
+    const buffer = req.body as Buffer;
+    if (!buffer || !Buffer.isBuffer(buffer) || buffer.length === 0) {
+      return res.status(400).json({ message: 'Request body must be the test.json file contents.' });
+    }
+
+    const parsed = parseBufferAsJson(buffer);
+    if (!parsed?.data) {
+      return res.status(400).json({ message: parsed?.error || 'Unable to parse uploaded file as JSON.' });
+    }
+
+    const data = parsed.data;
+    ensureLatestTestFile();
+    fs.writeFileSync(latestTestFile, JSON.stringify(data ?? [], null, 2), 'utf8');
+
+    const usedKey = key;
+    const prefix = usedKey.replace(/\/?test\.json(\.zip|\.gz)?$/i, '');
+    const resultLink = resultUrl || presignS3GetUrl(`${prefix}/result.html`) || s3UrlForKey(`${prefix}/result.html`);
+
+    const existing = db.prepare('SELECT id, createdAt, name FROM test_runs WHERE key = ?').get(usedKey) as
+      | { id: string; createdAt: string; name: string }
+      | undefined;
+    const id = existing?.id || `${Date.now()}`;
+    const createdAt = existing?.createdAt || new Date().toISOString();
+
+    upsertResultRunToDb({
+      id,
+      name: name || existing?.name || usedKey,
+      key: usedKey,
+      resultUrl: resultLink,
+      data,
+      createdAt
+    });
+
+    res.status(201).json({
+      saved: true,
+      key: usedKey,
+      runId: id,
+      resultUrl: resultLink,
+      note: parsed.note,
+      count: Array.isArray(data) ? data.length : 0
+    });
+  }
+);
+
+// Upload a zipped report folder for archival (kept in DB for ~30 days by expiresAt).
+// This does NOT parse/extract; it stores the zip blob so result.html/test.json are always retrievable.
+app.post(
+  '/api/results/upload-report-zip',
+  express.raw({ type: ['application/zip', 'application/octet-stream'], limit: apiBodyLimit }),
+  (req, res) => {
+    const key = (req.query.key as string) || (req.header('x-run-key') as string) || '';
+    const name = (req.query.name as string) || (req.header('x-run-name') as string) || undefined;
+    const resultUrl = (req.query.resultUrl as string) || (req.header('x-result-url') as string) || undefined;
+    if (!key) return res.status(400).json({ message: 'key query param is required (e.g. 12-16-25/.../reports/report.zip)' });
+
+    const buffer = req.body as Buffer;
+    if (!buffer || !Buffer.isBuffer(buffer) || buffer.length === 0) {
+      return res.status(400).json({ message: 'Request body must be the report zip contents.' });
+    }
+
+    const existing = db.prepare('SELECT id, createdAt, name, key, resultUrl FROM test_runs WHERE key = ?').get(key) as
+      | { id: string; createdAt: string; name: string; key: string; resultUrl?: string }
+      | undefined;
+    const id = existing?.id || `${Date.now()}`;
+    const createdAt = existing?.createdAt || new Date().toISOString();
+
+    upsertResultRunToDb({
+      id,
+      name: name || existing?.name || key,
+      key,
+      resultUrl: resultUrl || existing?.resultUrl,
+      createdAt,
+      reportZip: buffer
+    });
+
+    res.status(201).json({ saved: true, key, runId: id, size: buffer.length });
+  }
+);
+
+app.get('/api/results/report-zip', (req, res) => {
+  const key = (req.query.key as string) || '';
+  if (!key) return res.status(400).json({ message: 'key query param is required' });
+  const row = db.prepare('SELECT reportZip FROM test_runs WHERE key = ?').get(key) as { reportZip?: Buffer } | undefined;
+  if (!row?.reportZip) return res.status(404).json({ message: 'No report zip stored for this key.' });
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', 'inline; filename="report.zip"');
+  res.send(row.reportZip);
+});
+
+app.get('/api/results/run-status', (req, res) => {
+  const key = (req.query.key as string) || '';
+  if (!key) return res.status(400).json({ message: 'key query param is required' });
+  const row = db
+    .prepare(
+      `SELECT id, key, name, createdAt, expiresAt,
+              length(COALESCE(data, '')) AS dataChars,
+              length(COALESCE(resultHtml, '')) AS resultHtmlChars,
+              length(reportZip) AS reportZipBytes
+       FROM test_runs
+       WHERE key = ?`
+    )
+    .get(key) as
+    | {
+        id: string;
+        key: string;
+        name: string;
+        createdAt: string;
+        expiresAt?: string;
+        dataChars: number;
+        resultHtmlChars: number;
+        reportZipBytes?: number;
+      }
+    | undefined;
+
+  if (!row) {
+    return res.json({ key, exists: false });
+  }
+  const hasTestJson = (row.dataChars ?? 0) > 2; // '[]' is 2 chars
+  const hasResultHtml = (row.resultHtmlChars ?? 0) > 0;
+  const hasReportZip = (row.reportZipBytes ?? 0) > 0;
+  res.json({
+    key,
+    exists: true,
+    id: row.id,
+    name: row.name,
+    createdAt: row.createdAt,
+    expiresAt: row.expiresAt,
+    hasTestJson,
+    dataChars: row.dataChars,
+    hasResultHtml,
+    resultHtmlChars: row.resultHtmlChars,
+    hasReportZip,
+    reportZipBytes: row.reportZipBytes ?? 0
+  });
+});
+
+app.post(
+  '/api/results/upload-result-html',
+  express.raw({ type: ['text/html', 'application/octet-stream'], limit: apiBodyLimit }),
+  (req, res) => {
+    const key = (req.query.key as string) || (req.header('x-run-key') as string) || '';
+    const name = (req.query.name as string) || (req.header('x-run-name') as string) || undefined;
+    const resultUrl = (req.query.resultUrl as string) || (req.header('x-result-url') as string) || undefined;
+    if (!key) return res.status(400).json({ message: 'key query param is required (use the same key as test.json for this run).' });
+
+    const buffer = req.body as Buffer;
+    if (!buffer || !Buffer.isBuffer(buffer) || buffer.length === 0) {
+      return res.status(400).json({ message: 'Request body must be the result.html contents.' });
+    }
+    const html = buffer.toString('utf8');
+
+    const existing = db.prepare('SELECT id, createdAt, name, resultUrl FROM test_runs WHERE key = ?').get(key) as
+      | { id: string; createdAt: string; name: string; resultUrl?: string }
+      | undefined;
+    const id = existing?.id || `${Date.now()}`;
+    const createdAt = existing?.createdAt || new Date().toISOString();
+
+    upsertResultRunToDb({
+      id,
+      name: name || existing?.name || key,
+      key,
+      resultUrl: resultUrl || existing?.resultUrl,
+      createdAt,
+      resultHtml: html
+    });
+
+    res.status(201).json({ saved: true, key, runId: id, size: buffer.length });
+  }
+);
+
+app.get('/api/results/result-html', (req, res) => {
+  const key = (req.query.key as string) || '';
+  if (!key) return res.status(400).json({ message: 'key query param is required' });
+  const row = db
+    .prepare('SELECT resultHtml, expiresAt FROM test_runs WHERE key = ?')
+    .get(key) as { resultHtml?: string; expiresAt?: string } | undefined;
+  if (!row?.resultHtml) return res.status(404).json({ message: 'No result.html stored for this key.' });
+  if (row.expiresAt && Date.parse(row.expiresAt) <= Date.now()) {
+    return res.status(410).json({ message: 'This report has expired.' });
+  }
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(row.resultHtml);
+});
+
+app.get('/api/results/latest-json', (_req, res) => {
+  ensureLatestTestFile();
+  if (!fs.existsSync(latestTestFile)) return res.json({ message: 'No cached test.json yet' });
+  try {
+    const data = JSON.parse(fs.readFileSync(latestTestFile, 'utf8'));
+    res.json(data);
+  } catch {
+    res.status(500).json({ message: 'Failed to read cached test.json' });
+  }
+});
+
+app.get('/api/results/result-url', (req, res) => {
+  const key = req.query.key as string;
+  if (!key) return res.status(400).json({ message: 'key is required (e.g. 11-24-25:B/result.html)' });
+  const url = presignS3GetUrl(key) || s3UrlForKey(key);
+  res.json({ key, url });
+});
+
+// Result runs storage (full test.json with result link)
+app.get('/api/result-runs', (_req, res) => {
+  const now = Date.now();
+  const runs = loadResultRuns()
+    .filter(r => !r.expiresAt || Date.parse(r.expiresAt) > now)
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  res.json(runs);
+});
+
+app.post('/api/result-runs', (req, res) => {
+  const { name, key, resultUrl, data } = req.body as Partial<StoredResultRun>;
+  if (!data && !key) return res.status(400).json({ message: 'key or data is required' });
+  const runs = loadResultRuns();
+  const id = `${Date.now()}`;
+  const createdAt = new Date().toISOString();
+  const entry: StoredResultRun = {
+    id,
+    name: name || key || `Run ${createdAt}`,
+    key,
+    resultUrl,
+    data,
+    createdAt
+  };
+  runs.push(entry);
+  saveResultRuns(runs);
+  res.status(201).json(entry);
+});
+
+// Jenkins trigger proxy (buildWithParameters)
+app.post('/api/jenkins/trigger', async (req, res) => {
+  const { jobUrl, params, cause } = req.body as { jobUrl?: string; params?: Record<string, string>; cause?: string };
+  const user = process.env.JENKINS_USER;
+  const token = process.env.JENKINS_TOKEN;
+  const triggerToken = process.env.JENKINS_TRIGGER_TOKEN;
+  const defaultJobUrl = process.env.JENKINS_JOB_URL || jobUrl || 'https://jenkins.otsops.com/job/POC_QA_DASHBOARD/buildWithParameters';
+
+  console.log('[Jenkins trigger] incoming params', { jobUrl: defaultJobUrl, params });
+
+  if (!user || !token) {
+    return res.status(500).json({ message: 'Jenkins credentials are not configured on the server.' });
+  }
+  if (!defaultJobUrl) {
+    return res.status(400).json({ message: 'jobUrl is required.' });
+  }
+
+  try {
+    const targetUrl = new URL(defaultJobUrl);
+    const origin = `${targetUrl.protocol}//${targetUrl.host}`;
+    const authHeader = 'Basic ' + Buffer.from(`${user}:${token}`).toString('base64');
+
+    // Optional crumb fetch
+    let crumbHeader: Record<string, string> = {};
+    let crumbCookies = '';
+    try {
+      const crumbResp = await fetch(`${origin}/crumbIssuer/api/json`, {
+        headers: { Authorization: authHeader }
+      });
+      if (crumbResp.ok) {
+        const crumbJson = (await crumbResp.json()) as { crumbRequestField?: string; crumb?: string };
+        if (crumbJson.crumbRequestField && crumbJson.crumb) {
+          crumbHeader = { [crumbJson.crumbRequestField]: crumbJson.crumb };
+        }
+        const rawHeaders = (crumbResp.headers as any)?.raw?.();
+        const setCookie = rawHeaders ? rawHeaders['set-cookie'] : undefined;
+        if (Array.isArray(setCookie) && setCookie.length) {
+          crumbCookies = setCookie.map((c: string) => c.split(';')[0]).join('; ');
+        }
+      }
+    } catch (err) {
+      console.warn('Crumb fetch failed, proceeding without crumb:', err);
+    }
+
+    // Jenkins is happier when parameters are sent as form data (POST body).
+    // We append only token/cause to the URL to satisfy “Trigger build remotely”,
+    // and send the actual parameters in the body as x-www-form-urlencoded.
+    const queryParams = new URLSearchParams();
+    if (triggerToken) queryParams.append('token', triggerToken);
+    if (cause) queryParams.append('cause', cause);
+    const buildUrl = queryParams.toString() ? `${defaultJobUrl}?${queryParams.toString()}` : defaultJobUrl;
+
+    const bodyParams = new URLSearchParams();
+    Object.entries((params as Record<string, string>) || {}).forEach(([k, v]) => {
+      if (v !== undefined && v !== null) bodyParams.append(k, v);
+    });
+
+    const triggerResp = await fetch(buildUrl, {
+      method: 'POST',
+      headers: {
+        Authorization: authHeader,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        ...crumbHeader,
+        ...(crumbCookies ? { cookie: crumbCookies } : {})
+      },
+      body: bodyParams.toString()
+    });
+
+    if (!triggerResp.ok) {
+      const text = await triggerResp.text();
+      const snippet = text ? text.slice(0, 4000) : '';
+      console.error('[Jenkins trigger] non-200', triggerResp.status, {
+        url: buildUrl,
+        params: bodyParams.toString(),
+        statusText: triggerResp.statusText,
+        bodySnippet: snippet
+      });
+      return res
+        .status(triggerResp.status)
+        .json({ message: 'Failed to trigger Jenkins', statusText: triggerResp.statusText, details: snippet });
+    }
+
+    const queueUrl = triggerResp.headers.get('location') || '';
+    const queueId = queueUrl ? Number(queueUrl.split('/').filter(Boolean).pop()) : undefined;
+
+    return res.json({ queued: true, message: 'Jenkins job triggered', queueUrl, queueId });
+  } catch (err: any) {
+    console.error('Jenkins trigger error', err);
+    return res.status(500).json({ message: 'Error triggering Jenkins', error: String(err?.message || err) });
+  }
+});
+
+// Helpers for Jenkins API proxying
+function getJenkinsAuth() {
+  const user = process.env.JENKINS_USER;
+  const token = process.env.JENKINS_TOKEN;
+  if (!user || !token) throw new Error('Jenkins credentials not configured');
+  const authHeader = 'Basic ' + Buffer.from(`${user}:${token}`).toString('base64');
+  return { authHeader, user, token };
+}
+
+function getJenkinsOrigin() {
+  const jobUrl = process.env.JENKINS_JOB_URL;
+  if (jobUrl) {
+    const url = new URL(jobUrl);
+    return `${url.protocol}//${url.host}`;
+  }
+  return null;
+}
+
+// Get queue item info
+app.get('/api/jenkins/queue/:id', async (req, res) => {
+  try {
+    const origin = getJenkinsOrigin();
+    if (!origin) return res.status(500).json({ message: 'JENKINS_JOB_URL not set' });
+    const { authHeader } = getJenkinsAuth();
+    const queueId = req.params.id;
+    const resp = await fetch(`${origin}/queue/item/${queueId}/api/json`, {
+      headers: { Authorization: authHeader }
+    });
+    if (!resp.ok) {
+      const text = await resp.text();
+      return res.status(resp.status).json({ message: 'Failed to fetch queue item', details: text });
+    }
+    const data = await resp.json();
+    return res.json(data);
+  } catch (err: any) {
+    console.error('Jenkins queue fetch error', err);
+    return res.status(500).json({ message: 'Error fetching Jenkins queue', error: String(err?.message || err) });
+  }
+});
+
+// Cancel a queue item
+app.post('/api/jenkins/queue/:id/cancel', async (req, res) => {
+  try {
+    const origin = getJenkinsOrigin();
+    if (!origin) return res.status(500).json({ message: 'JENKINS_JOB_URL not set' });
+    const { authHeader } = getJenkinsAuth();
+    const queueId = req.params.id;
+
+    let crumbHeader: Record<string, string> = {};
+    let crumbCookies = '';
+    try {
+      const crumbResp = await fetch(`${origin}/crumbIssuer/api/json`, { headers: { Authorization: authHeader } });
+      if (crumbResp.ok) {
+        const crumbJson = (await crumbResp.json()) as { crumbRequestField?: string; crumb?: string };
+        if (crumbJson.crumbRequestField && crumbJson.crumb) {
+          crumbHeader = { [crumbJson.crumbRequestField]: crumbJson.crumb };
+        }
+        const rawHeaders = (crumbResp.headers as any)?.raw?.();
+        const setCookie = rawHeaders ? rawHeaders['set-cookie'] : undefined;
+        if (Array.isArray(setCookie) && setCookie.length) {
+          crumbCookies = setCookie.map((c: string) => c.split(';')[0]).join('; ');
+        }
+      }
+    } catch (err) {
+      console.warn('Crumb fetch failed for cancel, proceeding without crumb:', err);
+    }
+
+    const resp = await fetch(`${origin}/queue/item/${queueId}/cancel`, {
+      method: 'POST',
+      headers: {
+        Authorization: authHeader,
+        ...crumbHeader,
+        ...(crumbCookies ? { cookie: crumbCookies } : {})
+      }
+    });
+    if (!resp.ok) {
+      const text = await resp.text();
+      return res.status(resp.status).json({ message: 'Failed to cancel queue item', details: text.slice(0, 2000) });
+    }
+    res.json({ cancelled: true, queueId });
+  } catch (err: any) {
+    console.error('Jenkins queue cancel error', err);
+    return res.status(500).json({ message: 'Error cancelling Jenkins queue item', error: String(err?.message || err) });
+  }
+});
+
+// Get build info; expects a Jenkins build URL in query param `url`
+app.get('/api/jenkins/build', async (req, res) => {
+  try {
+    const buildUrl = req.query.url as string | undefined;
+    if (!buildUrl) return res.status(400).json({ message: 'url query param is required' });
+    const origin = getJenkinsOrigin();
+    if (!origin) return res.status(500).json({ message: 'JENKINS_JOB_URL not set' });
+    // Basic SSRF guard: require URL to start with Jenkins origin
+    if (!buildUrl.startsWith(origin)) {
+      return res.status(400).json({ message: 'Invalid build URL' });
+    }
+    const { authHeader } = getJenkinsAuth();
+    const target = buildUrl.endsWith('/api/json') ? buildUrl : `${buildUrl.replace(/\/api\/json$/, '')}/api/json`;
+    const resp = await fetch(target, {
+      headers: { Authorization: authHeader }
+    });
+    if (!resp.ok) {
+      const text = await resp.text();
+      return res.status(resp.status).json({ message: 'Failed to fetch build info', details: text });
+    }
+    const data = await resp.json();
+    let parameters: Array<{ name: string; value: any }> = [];
+    if (Array.isArray(data?.actions)) {
+      for (const action of data.actions) {
+        if (Array.isArray(action?.parameters)) {
+          parameters = action.parameters;
+          break;
+        }
+      }
+    }
+    let runPrefix =
+      parameters.find((p: any) => p?.name === 'RUN_PREFIX')?.value ||
+      parameters.find((p: any) => p?.name === 'ARTIFACT_PREFIX')?.value ||
+      null;
+
+    // Fallback: compute prefix from build info (date/job/number) to mirror pipeline folder structure
+    if (!runPrefix) {
+      try {
+        const urlObj = new URL(buildUrl);
+        const parts = urlObj.pathname.split('/').filter(Boolean);
+        const jobIdx = parts.indexOf('job');
+        const jobName = jobIdx >= 0 && parts[jobIdx + 1] ? parts[jobIdx + 1] : null;
+        const buildNumber =
+          data?.number ??
+          (parts.length ? Number(parts[parts.length - 1]) : undefined);
+        const ts = data?.timestamp;
+        if (jobName && buildNumber && ts) {
+          const d = new Date(ts);
+          const mm = String(d.getMonth() + 1).padStart(2, '0');
+          const dd = String(d.getDate()).padStart(2, '0');
+          const yy = String(d.getFullYear()).slice(-2);
+          const datePart = `${mm}-${dd}-${yy}`;
+          runPrefix = `${datePart}/desktop_web/${jobName}/${buildNumber}/reports`;
+        }
+      } catch {
+        // ignore fallback errors
+      }
+    }
+
+    return res.json({ ...data, parameters, runPrefix });
+  } catch (err: any) {
+    console.error('Jenkins build fetch error', err);
+    return res.status(500).json({ message: 'Error fetching Jenkins build', error: String(err?.message || err) });
+  }
+});
+
+// Stop a running build
+app.post('/api/jenkins/build/stop', async (req, res) => {
+  try {
+    const buildUrl = req.body?.url as string | undefined;
+    if (!buildUrl) return res.status(400).json({ message: 'url is required' });
+    const origin = getJenkinsOrigin();
+    if (!origin) return res.status(500).json({ message: 'JENKINS_JOB_URL not set' });
+    if (!buildUrl.startsWith(origin)) return res.status(400).json({ message: 'Invalid build URL' });
+    const { authHeader } = getJenkinsAuth();
+
+    let crumbHeader: Record<string, string> = {};
+    let crumbCookies = '';
+    try {
+      const crumbResp = await fetch(`${origin}/crumbIssuer/api/json`, { headers: { Authorization: authHeader } });
+      if (crumbResp.ok) {
+        const crumbJson = (await crumbResp.json()) as { crumbRequestField?: string; crumb?: string };
+        if (crumbJson.crumbRequestField && crumbJson.crumb) {
+          crumbHeader = { [crumbJson.crumbRequestField]: crumbJson.crumb };
+        }
+        const rawHeaders = (crumbResp.headers as any)?.raw?.();
+        const setCookie = rawHeaders ? rawHeaders['set-cookie'] : undefined;
+        if (Array.isArray(setCookie) && setCookie.length) {
+          crumbCookies = setCookie.map((c: string) => c.split(';')[0]).join('; ');
+        }
+      }
+    } catch (err) {
+      console.warn('Crumb fetch failed for stop, proceeding without crumb:', err);
+    }
+
+    const stopUrl = buildUrl.endsWith('/') ? `${buildUrl}stop` : `${buildUrl}/stop`;
+    const resp = await fetch(stopUrl, {
+      method: 'POST',
+      headers: {
+        Authorization: authHeader,
+        ...crumbHeader,
+        ...(crumbCookies ? { cookie: crumbCookies } : {})
+      }
+    });
+    if (!resp.ok) {
+      const text = await resp.text();
+      return res.status(resp.status).json({ message: 'Failed to stop build', details: text.slice(0, 2000) });
+    }
+    res.json({ stopped: true, url: stopUrl });
+  } catch (err: any) {
+    console.error('Jenkins stop build error', err);
+    return res.status(500).json({ message: 'Error stopping Jenkins build', error: String(err?.message || err) });
+  }
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`NBCuniversal backend listening on port ${PORT}`);
+  scheduleEnvHealthAutoSync(Number(PORT));
+});

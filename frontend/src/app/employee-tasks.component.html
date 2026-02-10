@@ -1,0 +1,57 @@
+<section>
+  <button class="btn btn-outline-success mb-3" type="button" (click)="goBack()">
+    <i class="bi bi-arrow-left"></i>
+    Back
+  </button>
+  <div
+    *ngIf="alertMessage"
+    class="alert"
+    [ngClass]="{
+      'alert-success': alertType === 'success',
+      'alert-danger': alertType === 'danger'
+    }"
+  >
+    {{ alertMessage }}
+  </div>
+  <h1>My Tasks</h1>
+  <div class="form-field" *ngIf="employees.length > 1">
+    <label>Select Employee</label>
+    <select class="form-select" [(ngModel)]="employeeName" (change)="onEmployeeChange()">
+      <option *ngFor="let employee of employees" [value]="employee.name">
+        {{ employee.name }} — {{ employee.role }}
+      </option>
+    </select>
+  </div>
+  <p *ngIf="tasks.length === 0" class="text-muted">No assignments yet. Check back soon.</p>
+  <div *ngFor="let task of tasks" class="slider-item" style="margin-bottom: 1rem;">
+    <div class="slider-item-content">
+      <h2>{{ task.title }}</h2>
+      <p>{{ task.description }}</p>
+      <p class="text-muted" *ngIf="task.dueDate">
+        <i class="bi bi-calendar-event me-1"></i>
+        Due: {{ task.dueDate }}
+      </p>
+
+      <div class="form-field">
+        <label>Status</label>
+        <select [(ngModel)]="task.status">
+          <option value="pending">Pending</option>
+          <option value="in progress">In Progress</option>
+          <option value="complete">Complete</option>
+        </select>
+      </div>
+
+      <div class="form-field">
+        <label>Comment</label>
+        <textarea [(ngModel)]="task.comment" placeholder="Add any notes about this task"></textarea>
+      </div>
+
+      <div class="form-field">
+        <label>Upload Image (not yet wired)</label>
+        <input type="file">
+      </div>
+
+      <button class="btn-primary" (click)="onSubmit(task)">Submit Update</button>
+    </div>
+  </div>
+</section>
