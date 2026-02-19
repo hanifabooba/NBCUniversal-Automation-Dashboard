@@ -22,6 +22,7 @@ import { EnquiryBoardComponent } from './enquiry-board.component';
 import { DashboardComponent } from './dashboard.component';
 import { TestResultsComponent } from './test-results.component';
 import { TeamWeeklyTaskComponent } from './team-weekly-task.component';
+import { TestCasesHubComponent } from './test-cases-hub.component';
 
 export const appRoutes: Routes = [
   { path: '', component: HomeComponent },
@@ -40,6 +41,7 @@ export const appRoutes: Routes = [
   { path: 'releaseboard', component: OrderFulfillmentBoardComponent },
   { path: 'automation-weekly-status', component: OrderHistoryComponent },
   { path: 'team-weekly-task', component: TeamWeeklyTaskComponent },
+  { path: 'test-cases-hub', component: TestCasesHubComponent },
   { path: 'release-history', redirectTo: 'automation-weekly-status' },
   { path: 'order-history', redirectTo: 'automation-weekly-status' },
   { path: 'results', component: TestResultsComponent },

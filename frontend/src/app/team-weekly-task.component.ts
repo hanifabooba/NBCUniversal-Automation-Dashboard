@@ -11,6 +11,7 @@ interface WeeklyTask {
   team: string;
   title: string;
   description: string;
+  weeklyTasks?: string;
   priority: 'Low' | 'Medium' | 'High' | 'Critical';
   engineer: string;
   status: TaskStatus;
@@ -34,8 +35,16 @@ export class TeamWeeklyTaskComponent implements OnInit {
   team = '';
   title = '';
   description = '';
+  weeklyTasks = '';
   priority: WeeklyTask['priority'] = 'Medium';
   engineer = '';
+  engineerOptions = ['David Reyes', 'Ibrahim Jalloh', 'Gopinath Palanisamy', 'Vikas Singh'];
+  taskWeek = this.currentWeek();
+  weekOptions = this.buildWeekOptions();
+  blockedModalOpen = false;
+  blockedReason = '';
+  blockedReasonError = '';
+  pendingBlockedTask: WeeklyTask | null = null;
 
   selectedWeek = signal<string>(this.currentWeek());
   readonly weekRange = computed(() => {
@@ -108,10 +117,11 @@ export class TeamWeeklyTaskComponent implements OnInit {
     const now = new Date();
     const task: WeeklyTask = {
       id: Date.now(),
-      weekOf: this.selectedWeek(),
+      weekOf: this.taskWeek || this.selectedWeek(),
       team: this.team.trim() || 'Team',
       title: trimmedTitle,
       description: this.description.trim(),
+      weeklyTasks: this.weeklyTasks.trim(),
       priority: this.priority,
       engineer: this.engineer.trim() || 'Unassigned',
       status: 'assigned',
@@ -130,12 +140,53 @@ export class TeamWeeklyTaskComponent implements OnInit {
     const targetStatus = event.container.id as TaskStatus;
     const item = event.previousContainer.data[event.previousIndex];
     if (targetStatus === 'blocked' && item.status !== 'blocked') {
-      const reason = prompt('Add blocked reason:') || '';
-      item.blockedReason = reason.trim() || 'Not provided';
+      this.openBlockedModal(item);
+      return;
+    }
+    if (targetStatus !== 'blocked') {
+      item.blockedReason = undefined;
     }
     item.status = targetStatus;
     transferArrayItem(event.previousContainer.data, event.container.data, event.previousIndex, event.currentIndex);
     this.saveTasks();
+  }
+
+  updateEngineer(task: WeeklyTask, engineer: string): void {
+    if (!task) return;
+    task.engineer = engineer || 'Unassigned';
+    this.saveTasks();
+  }
+
+  confirmBlockedReason(): void {
+    const reason = this.blockedReason.trim();
+    if (!reason) {
+      this.blockedReasonError = 'Blocked reason is required.';
+      return;
+    }
+    if (this.pendingBlockedTask) {
+      this.pendingBlockedTask.status = 'blocked';
+      this.pendingBlockedTask.blockedReason = reason;
+      this.saveTasks();
+    }
+    this.closeBlockedModal();
+  }
+
+  cancelBlockedReason(): void {
+    this.closeBlockedModal();
+  }
+
+  private openBlockedModal(task: WeeklyTask): void {
+    this.pendingBlockedTask = task;
+    this.blockedReason = '';
+    this.blockedReasonError = '';
+    this.blockedModalOpen = true;
+  }
+
+  private closeBlockedModal(): void {
+    this.blockedModalOpen = false;
+    this.blockedReason = '';
+    this.blockedReasonError = '';
+    this.pendingBlockedTask = null;
   }
 
   switchTab(tab: 'weekly' | 'board' | 'report'): void {
@@ -146,12 +197,27 @@ export class TeamWeeklyTaskComponent implements OnInit {
     const current = new Date(this.selectedWeek());
     current.setDate(current.getDate() + offset * 7);
     this.selectedWeek.set(this.weekStart(current));
+    this.taskWeek = this.selectedWeek();
   }
 
   setWeekFromPicker(value: string): void {
     if (!value) return;
     const date = new Date(value);
     this.selectedWeek.set(this.weekStart(date));
+    this.taskWeek = this.selectedWeek();
+  }
+
+  jumpToFuture(): void {
+    const current = this.selectedWeek();
+    const futureWeeks = Array.from(new Set(this.tasks().map(t => t.weekOf)))
+      .filter(week => week > current)
+      .sort();
+    if (futureWeeks.length) {
+      this.selectedWeek.set(futureWeeks[0]);
+    } else {
+      this.changeWeek(1);
+    }
+    this.taskWeek = this.selectedWeek();
   }
 
   pieStyle(): string {
@@ -179,8 +245,10 @@ export class TeamWeeklyTaskComponent implements OnInit {
     this.team = '';
     this.title = '';
     this.description = '';
+    this.weeklyTasks = '';
     this.priority = 'Medium';
     this.engineer = '';
+    this.taskWeek = this.selectedWeek();
   }
 
   private loadTasks(): void {
@@ -203,6 +271,18 @@ export class TeamWeeklyTaskComponent implements OnInit {
 
   currentWeek(): string {
     return this.weekStart(new Date());
+  }
+
+  private buildWeekOptions(count = 12): Array<{ value: string; label: string }> {
+    const start = new Date(this.currentWeek());
+    const options: Array<{ value: string; label: string }> = [];
+    for (let i = 0; i < count; i += 1) {
+      const date = new Date(start);
+      date.setDate(start.getDate() + i * 7);
+      const value = this.weekStart(date);
+      options.push({ value, label: `Week of ${value}` });
+    }
+    return options;
   }
 
   private weekStart(date: Date): string {

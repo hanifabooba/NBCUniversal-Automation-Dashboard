@@ -71,53 +71,68 @@
         <div class="col-md-6 col-xl-4" *ngFor="let run of recentRuns">
           <div class="card h-100 shadow-sm">
             <div class="card-body d-flex flex-column gap-2">
-              <div class="d-flex justify-content-between align-items-center">
-                <div class="fw-semibold">Run #{{ run.id }}</div>
-                <span class="badge" [ngClass]="{
-                  'text-bg-warning': run.status === 'pending' || run.status === 'queued',
-                  'text-bg-info': run.status === 'inprogress' || run.status === 'running',
-                  'text-bg-success': run.status === 'completed',
-                  'text-bg-danger': run.status === 'failure' || run.status === 'failed',
-                  'text-bg-secondary': run.status !== 'pending' && run.status !== 'queued' && run.status !== 'inprogress' && run.status !== 'running' && run.status !== 'completed' && run.status !== 'failure' && run.status !== 'failed'
-                }">{{ run.status }}</span>
+              <div class="d-flex justify-content-between align-items-start gap-2">
+                <div>
+                  <div class="fw-semibold">Run #{{ run.id }}</div>
+                  <div class="small text-muted">{{ run.date }} {{ run.when }} · {{ run.who }}</div>
+                </div>
+                <div class="d-flex align-items-center gap-2">
+                  <span class="badge" [ngClass]="{
+                    'text-bg-warning': run.status === 'pending' || run.status === 'queued',
+                    'text-bg-info': run.status === 'inprogress' || run.status === 'running',
+                    'text-bg-success': run.status === 'completed',
+                    'text-bg-danger': run.status === 'failure' || run.status === 'failed',
+                    'text-bg-secondary': run.status !== 'pending' && run.status !== 'queued' && run.status !== 'inprogress' && run.status !== 'running' && run.status !== 'completed' && run.status !== 'failure' && run.status !== 'failed'
+                  }">{{ run.status }}</span>
+                  <button
+                    class="btn btn-outline-secondary btn-sm"
+                    type="button"
+                    (click)="toggleRunDetails(run)"
+                    [attr.aria-expanded]="isRunExpanded(run)"
+                    [attr.aria-controls]="'run-details-' + run.id"
+                    aria-label="Toggle run details">
+                    <i class="bi" [ngClass]="isRunExpanded(run) ? 'bi-chevron-up' : 'bi-chevron-down'"></i>
+                  </button>
+                </div>
               </div>
-              <div class="small text-muted">{{ run.date }} {{ run.when }} · {{ run.who }}</div>
-              <div class="small"><strong>Env:</strong> {{ run.env }}</div>
-              <div class="small"><strong>Feature:</strong> {{ run.feature }}</div>
-              <div class="small" *ngIf="run.browser"><strong>Browser:</strong> {{ run.browser }}</div>
-              <div class="small" *ngIf="run.deviceType"><strong>Device:</strong> {{ run.deviceType }}</div>
-              <div class="small" *ngIf="run.queueUrl">
-                <strong>Queue:</strong>
-                <a [href]="run.queueUrl" target="_blank" rel="noreferrer">{{ run.queueUrl }}</a>
+
+              <div class="d-flex flex-column gap-2" *ngIf="isRunExpanded(run)" [attr.id]="'run-details-' + run.id">
+                <div class="small"><strong>Env:</strong> {{ run.env }}</div>
+                <div class="small"><strong>Feature:</strong> {{ run.feature }}</div>
+                <div class="small" *ngIf="run.browser"><strong>Browser:</strong> {{ run.browser }}</div>
+                <div class="small" *ngIf="run.deviceType"><strong>Device:</strong> {{ run.deviceType }}</div>
+                <div class="small" *ngIf="run.queueUrl">
+                  <strong>Queue:</strong>
+                  <a [href]="run.queueUrl" target="_blank" rel="noreferrer">{{ run.queueUrl }}</a>
+                </div>
+                <div class="small" *ngIf="run.buildNumber">
+                  <strong>Build #:</strong> {{ run.buildNumber }}
+                </div>
+                <div class="small" *ngIf="run.testJsonUrl">
+                  <strong>test.json:</strong>
+                  <a [href]="run.testJsonUrl" target="_blank" rel="noreferrer">download</a>
+                </div>
+                <div class="small" *ngIf="run.resultUrl">
+                  <strong>Report:</strong>
+                  <a [href]="run.resultUrl" target="_blank" rel="noreferrer">view</a>
+                </div>
+                <div class="d-flex align-items-center gap-2">
+                  <button
+                    class="btn btn-outline-danger btn-sm"
+                    type="button"
+                    [disabled]="run.status === 'completed' || run.status === 'failure' || run.status === 'failed' || run.status === 'cancelled'"
+                    (click)="cancelRun(run)">
+                    Cancel
+                  </button>
+                  <div class="small text-muted" *ngIf="run.note">“{{ run.note }}”</div>
+                </div>
+                <div class="small">
+                  <strong>JIRA:</strong> {{ run.jira || '—' }}
+                </div>
+                <div class="small text-muted">
+                  <strong>Comment:</strong> {{ run.comment || '—' }}
+                </div>
               </div>
-              <div class="small" *ngIf="run.buildNumber">
-                <strong>Build #:</strong> {{ run.buildNumber }}
-              </div>
-              <div class="small" *ngIf="run.testJsonUrl">
-                <strong>test.json:</strong>
-                <a [href]="run.testJsonUrl" target="_blank" rel="noreferrer">download</a>
-              </div>
-              <div class="small" *ngIf="run.resultUrl">
-                <strong>Report:</strong>
-                <a [href]="run.resultUrl" target="_blank" rel="noreferrer">view</a>
-              </div>
-              <div class="d-flex align-items-center gap-2">
-                <button
-                  class="btn btn-outline-danger btn-sm"
-                  type="button"
-                  [disabled]="run.status === 'completed' || run.status === 'failure' || run.status === 'failed' || run.status === 'cancelled'"
-                  (click)="cancelRun(run)">
-                  Cancel
-                </button>
-                <div class="small text-muted" *ngIf="run.note">“{{ run.note }}”</div>
-              </div>
-              <div class="small">
-                <strong>JIRA:</strong> {{ run.jira || '—' }}
-              </div>
-              <div class="small text-muted">
-                <strong>Comment:</strong> {{ run.comment || '—' }}
-              </div>
-              <div class="small text-muted" *ngIf="run.note">“{{ run.note }}”</div>
             </div>
           </div>
         </div>

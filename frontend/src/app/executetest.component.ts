@@ -50,6 +50,7 @@ export class ExecuteTestComponent {
   jiraTicket = '';
   jenkinsStatus = '';
   jenkinsBusy = false;
+  expandedRunId: number | null = null;
   // Simple run feed (client-side) using latest triggers
   recentRuns: Array<{
     id: number;
@@ -102,8 +103,9 @@ export class ExecuteTestComponent {
         const userComment = this.comment.trim();
         const userJira = this.jiraTicket.trim();
         const userName = this.qaUser.trim() || 'Manual QA';
+        const newRunId = res.queueId || Date.now();
         this.recentRuns.unshift({
-          id: res.queueId || Date.now(),
+          id: newRunId,
           status: res.queued ? 'queued' : 'triggered',
           who: userName,
           when: now.toLocaleTimeString(),
@@ -137,6 +139,7 @@ export class ExecuteTestComponent {
         this.jiraTicket = '';
         // Keep feed reasonably small
         this.recentRuns = this.recentRuns.slice(0, 20);
+        this.expandedRunId = newRunId;
         this.saveRuns();
         this.updateBannerStatus();
       },
@@ -275,6 +278,7 @@ export class ExecuteTestComponent {
       this.recentRuns = [];
     }
     this.updateBannerStatus();
+    this.ensureExpandedRun();
   }
 
   private extractPrefix(build: any): string | null {
@@ -376,6 +380,32 @@ export class ExecuteTestComponent {
     const latest = this.recentRuns[0];
     const suffix = latest.buildNumber ? ` (#${latest.buildNumber})` : '';
     this.jenkinsStatus = `Latest: ${latest.status}${suffix}`;
+  }
+
+  toggleRunDetails(run: any): void {
+    if (!run) return;
+    this.expandedRunId = this.expandedRunId === run.id ? null : run.id;
+  }
+
+  isRunExpanded(run: any): boolean {
+    return !!run && this.expandedRunId === run.id;
+  }
+
+  private ensureExpandedRun(): void {
+    if (!this.recentRuns.length) {
+      this.expandedRunId = null;
+      return;
+    }
+    if (this.expandedRunId && this.recentRuns.some(run => run.id === this.expandedRunId)) {
+      return;
+    }
+    const active = this.recentRuns.find(run => this.isActiveStatus(run?.status));
+    this.expandedRunId = (active || this.recentRuns[0])?.id ?? null;
+  }
+
+  private isActiveStatus(status: string | undefined): boolean {
+    const s = String(status || '').toLowerCase();
+    return ['queued', 'pending', 'running', 'inprogress', 'in-progress', 'triggered'].includes(s);
   }
 
   private deriveKeyFromUrl(url: string | undefined): string | null {
