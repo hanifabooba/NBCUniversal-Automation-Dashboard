@@ -1,0 +1,29 @@
+<section class="py-4">
+  <div class="d-flex flex-column flex-md-row align-items-start justify-content-between gap-2 mb-4">
+    <div>
+      <p class="text-success text-uppercase small mb-1">Test Cases Hub</p>
+      <h1 class="h4 mb-0">Centralized QA test case library</h1>
+      <div class="text-muted small">Quick access to all test case sources and documentation.</div>
+    </div>
+  </div>
+
+  <div *ngIf="links.length; else emptyState" class="row g-3">
+    <div class="col-12 col-md-6 col-lg-4" *ngFor="let link of links">
+      <a class="text-decoration-none h-100 d-block" [href]="link.url" target="_blank" rel="noreferrer">
+        <div class="card h-100 shadow-sm hover-lift">
+          <div class="card-body">
+            <div class="d-flex align-items-center justify-content-between mb-2">
+              <div class="fw-semibold">{{ link.title }}</div>
+              <span *ngIf="link.tag" class="badge text-bg-light">{{ link.tag }}</span>
+            </div>
+            <div class="text-muted small">{{ link.description }}</div>
+          </div>
+        </div>
+      </a>
+    </div>
+  </div>
+
+  <ng-template #emptyState>
+    <div class="alert alert-secondary mb-0">No test case links yet. Add them to the Test Cases Hub.</div>
+  </ng-template>
+</section>

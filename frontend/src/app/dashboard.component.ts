@@ -34,15 +34,13 @@ export class DashboardComponent {
       icon: 'bi-collection',
       link: '/automation-weekly-status'
     });
+    list.push({
+      title: 'Test Cases Hub',
+      description: 'One-stop links to QA test case sources.',
+      icon: 'bi-journal-text',
+      link: '/test-cases-hub'
+    });
 
-    if (this.roles.canSeeOrders()) {
-      list.push({
-        title: 'Automation Weekly Status',
-        description: 'View weekly automation results and releases.',
-        icon: 'bi-clock-history',
-        link: '/automation-weekly-status'
-      });
-    }
     if (this.roles.canManageFulfillment()) {
       list.push({
         title: 'Release Board',

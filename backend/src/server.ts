@@ -370,11 +370,124 @@ const envHealthSyncHours = [8, 12, 17]; // local hours to auto-sync env health
 const envHealthRunKeys = new Set<string>();
 
 function normalizeTestResults(payload: any): any[] {
-  if (Array.isArray(payload)) return payload;
+  const convertCucumber = (features: any[]): any[] | null => {
+    if (!Array.isArray(features)) return null;
+    const looksLikeCucumber = features.some(f => Array.isArray(f?.elements));
+    if (!looksLikeCucumber) return null;
+    const results: any[] = [];
+    for (const feature of features) {
+      const featureName = feature?.name || 'Feature';
+      const elements = Array.isArray(feature?.elements) ? feature.elements : [];
+      for (const el of elements) {
+        const type = String(el?.type || '').toLowerCase();
+        if (type && type !== 'scenario' && type !== 'scenario_outline') continue;
+        const steps = Array.isArray(el?.steps) ? el.steps : [];
+        let hasFail = false;
+        let hasSkip = false;
+        for (const step of steps) {
+          const status = String(step?.result?.status || '').toUpperCase();
+          if (status === 'FAIL' || status === 'FAILED') {
+            hasFail = true;
+          } else if (status === 'SKIP' || status === 'SKIPPED' || status === 'PENDING' || status === 'UNDEFINED') {
+            hasSkip = true;
+          }
+        }
+        const status = hasFail ? 'FAIL' : hasSkip ? 'SKIP' : 'PASS';
+        results.push({
+          name: `${featureName} — ${el?.name || 'Scenario'}`,
+          status
+        });
+      }
+    }
+    return results;
+  };
+
+  if (Array.isArray(payload)) {
+    const cucumber = convertCucumber(payload);
+    if (cucumber) return cucumber;
+    return payload;
+  }
+  if (Array.isArray(payload?.features)) {
+    const cucumber = convertCucumber(payload.features);
+    if (cucumber) return cucumber;
+  }
   if (Array.isArray(payload?.results)) return payload.results;
   if (Array.isArray(payload?.tests)) return payload.tests;
+  if (Array.isArray(payload?.testList)) return payload.testList;
+  if (Array.isArray(payload?.test)) return payload.test;
+  if (Array.isArray(payload?.report?.test)) return payload.report.test;
+  if (Array.isArray(payload?.report?.tests)) return payload.report.tests;
   if (Array.isArray(payload?.data)) return payload.data;
   return payload ? [payload] : [];
+}
+
+function parseXmlSummary(xml: string): { total: number; passed: number; failed: number; skipped: number } | null {
+  const readAttr = (text: string, attr: string): number | null => {
+    const m = text.match(new RegExp(`\\b${attr}\\s*=\\s*["'](\\d+)["']`, 'i'));
+    return m ? Number(m[1]) : null;
+  };
+  const countMatches = (text: string, pattern: RegExp): number => {
+    const m = text.match(pattern);
+    return m ? m.length : 0;
+  };
+
+  const testsuiteMatch = xml.match(/<testsuite\b[^>]*>/i);
+  if (testsuiteMatch) {
+    const tag = testsuiteMatch[0];
+    const total = readAttr(tag, 'tests') ?? 0;
+    const failures = readAttr(tag, 'failures') ?? 0;
+    const errors = readAttr(tag, 'errors') ?? 0;
+    const skipped = readAttr(tag, 'skipped') ?? 0;
+    if (total > 0) {
+      const failed = failures + errors;
+      const passed = Math.max(0, total - failed - skipped);
+      return { total, passed, failed, skipped };
+    }
+  }
+
+  const testngMatch = xml.match(/<testng-results\b[^>]*>/i);
+  if (testngMatch) {
+    const tag = testngMatch[0];
+    const total = readAttr(tag, 'total') ?? 0;
+    const passed = readAttr(tag, 'passed') ?? 0;
+    const failed = readAttr(tag, 'failed') ?? 0;
+    const skipped = readAttr(tag, 'skipped') ?? 0;
+    if (total > 0) {
+      return { total, passed, failed, skipped };
+    }
+  }
+
+  const testcases = countMatches(xml, /<testcase\b/gi);
+  if (testcases > 0) {
+    const failures = countMatches(xml, /<failure\b/gi);
+    const errors = countMatches(xml, /<error\b/gi);
+    const skipped = countMatches(xml, /<skipped\b/gi);
+    const failed = failures + errors;
+    const total = testcases;
+    const passed = Math.max(0, total - failed - skipped);
+    return { total, passed, failed, skipped };
+  }
+
+  return null;
+}
+
+async function fetchXmlSummary(candidateKeys: string[]): Promise<{ summary: { total: number; passed: number; failed: number; skipped: number }; usedKey: string; url: string } | null> {
+  for (const key of candidateKeys) {
+    if (!key) continue;
+    const url = presignS3GetUrl(key) || s3UrlForKey(key);
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok) continue;
+      const text = await resp.text();
+      const summary = parseXmlSummary(text);
+      if (summary) {
+        return { summary, usedKey: key, url };
+      }
+    } catch {
+      // ignore and continue
+    }
+  }
+  return null;
 }
 
 function unzipFirstEntry(buffer: Buffer): Buffer | null {
@@ -607,7 +720,17 @@ function computeExpiresAt(createdAtIso: string, days = 30): string {
 function upsertResultRunToDb(run: StoredResultRun) {
   const hasData = run.data !== undefined;
   const data = hasData ? (Array.isArray(run.data) ? run.data : []) : null;
-  const counts = hasData ? countStatuses(data as any[]) : null;
+  let counts = hasData ? countStatuses(data as any[]) : null;
+  if (counts && counts.total === 0) {
+    counts = null;
+  }
+  if (!counts && (run.passed !== undefined || run.failed !== undefined || run.skipped !== undefined || run.total !== undefined)) {
+    const passed = run.passed ?? 0;
+    const failed = run.failed ?? 0;
+    const skipped = run.skipped ?? 0;
+    const total = run.total ?? Math.max(0, passed + failed + skipped);
+    counts = { passed, failed, skipped, total };
+  }
   const expiresAt = run.expiresAt || computeExpiresAt(run.createdAt, 30);
   db.prepare(
     `INSERT INTO test_runs (id, name, key, resultUrl, data, resultHtml, reportZip, createdAt, expiresAt, passed, failed, skipped, total)
@@ -648,10 +771,10 @@ function upsertResultRunToDb(run: StoredResultRun) {
     reportZip: run.reportZip ?? null,
     createdAt: run.createdAt,
     expiresAt,
-    passed: counts?.passed ?? null,
-    failed: counts?.failed ?? null,
-    skipped: counts?.skipped ?? null,
-    total: counts?.total ?? null
+      passed: counts?.passed ?? null,
+      failed: counts?.failed ?? null,
+      skipped: counts?.skipped ?? null,
+      total: counts?.total ?? null
   });
 }
 
@@ -706,12 +829,20 @@ function presignS3GetUrl(key: string, expiresSeconds = presignExpirySeconds): st
   const payloadHash = 'UNSIGNED-PAYLOAD';
 
   const canonicalUri = '/' + cleanedKey.split('/').map(seg => encodeURIComponent(seg)).join('/');
+  const amzKey = (name: string) => `X-Amz-${name}`;
+  const amzAlgorithmKey = amzKey('Algorithm');
+  const amzCredentialKey = amzKey('Credential');
+  const amzDateKey = amzKey('Date');
+  const amzExpiresKey = amzKey('Expires');
+  const amzSignedHeadersKey = amzKey('SignedHeaders');
+  const amzSignatureKey = amzKey('Signature');
+
   const canonicalQuery = [
-    `X-Amz-Algorithm=${algorithm}`,
-    `X-Amz-Credential=${encodeURIComponent(accessKey + '/' + credentialScope)}`,
-    `X-Amz-Date=${amzDate}`,
-    `X-Amz-Expires=${expiresSeconds}`,
-    `X-Amz-SignedHeaders=${signedHeaders}`
+    `${amzAlgorithmKey}=${algorithm}`,
+    `${amzCredentialKey}=${encodeURIComponent(accessKey + '/' + credentialScope)}`,
+    `${amzDateKey}=${amzDate}`,
+    `${amzExpiresKey}=${expiresSeconds}`,
+    `${amzSignedHeadersKey}=${signedHeaders}`
   ].join('&');
 
   const canonicalHeaders = `host:${host}\n`;
@@ -726,8 +857,128 @@ function presignS3GetUrl(key: string, expiresSeconds = presignExpirySeconds): st
   const signingKey = getSignatureKey(secretKey, dateStamp, defaultRegion, service);
   const signature = crypto.createHmac('sha256', signingKey).update(stringToSign, 'utf8').digest('hex');
 
-  const signedUrl = `https://${host}${canonicalUri}?${canonicalQuery}&X-Amz-Signature=${signature}`;
+  const signedUrl = `https://${host}${canonicalUri}?${canonicalQuery}&${amzSignatureKey}=${signature}`;
   return signedUrl;
+}
+
+function swapReportTargetInKey(key: string): string | null {
+  if (key.includes('/desktop_web/')) return key.replace('/desktop_web/', '/mobile_web/');
+  if (key.includes('/mobile_web/')) return key.replace('/mobile_web/', '/desktop_web/');
+  return null;
+}
+
+function normalizeReportTargetValue(value: any): string | null {
+  if (value === undefined || value === null) return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  const lowered = raw.toLowerCase().replace(/\s+/g, '_');
+  if (/(mobile|mw)/.test(lowered)) return 'mobile_web';
+  if (/(desktop|dw)/.test(lowered)) return 'desktop_web';
+  return lowered;
+}
+
+function applyReportTargetToKey(key: string, target: string | null): string | null {
+  if (!target) return null;
+  if (!key.includes('/desktop_web/') && !key.includes('/mobile_web/')) return null;
+  const normalized = normalizeReportTargetValue(target);
+  if (!normalized) return null;
+  return key.replace(/\/(desktop_web|mobile_web)\//, `/${normalized}/`);
+}
+
+function extractJobPathFromJobUrl(jobUrl?: string): string | null {
+  if (!jobUrl) return null;
+  try {
+    const url = new URL(jobUrl);
+    const parts = url.pathname.split('/').filter(Boolean);
+    const jobSegments: string[] = [];
+    for (let i = 0; i < parts.length; i += 1) {
+      if (parts[i] === 'job' && parts[i + 1]) {
+        const seg = parts[i + 1];
+        if (seg !== 'buildWithParameters' && seg !== 'build') {
+          jobSegments.push(seg);
+        }
+      }
+    }
+    return jobSegments.length ? jobSegments.join('/') : null;
+  } catch {
+    return null;
+  }
+}
+
+function applyJobPathToKey(key: string, jobPath: string | null): string | null {
+  if (!jobPath) return null;
+  const match = key.match(/^(\d{2}-\d{2}-\d{2})\/([^/]+)\/(.+?)\/(\d+)\/reports\/(.+)$/);
+  if (!match) return null;
+  const [, datePart, target, , buildNumber, tail] = match;
+  return `${datePart}/${target}/${jobPath}/${buildNumber}/reports/${tail}`;
+}
+
+function expandDateVariants(key: string): string[] {
+  const match = key.match(/^(\d{2})-(\d{2})-(\d{2})\//);
+  if (!match) return [key];
+  const month = Number(match[1]);
+  const day = Number(match[2]);
+  const year = 2000 + Number(match[3]);
+  if (!Number.isFinite(month) || !Number.isFinite(day) || !Number.isFinite(year)) return [key];
+  const baseUtc = Date.UTC(year, month - 1, day);
+  if (!Number.isFinite(baseUtc)) return [key];
+  const suffix = key.slice(match[0].length);
+  const offsets = [0, 1, -1, 2, -2];
+  const variants: string[] = [];
+  for (const offset of offsets) {
+    const d = new Date(baseUtc + offset * 24 * 60 * 60 * 1000);
+    const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+    const dd = String(d.getUTCDate()).padStart(2, '0');
+    const yy = String(d.getUTCFullYear()).slice(-2);
+    variants.push(`${mm}-${dd}-${yy}/${suffix}`);
+  }
+  return Array.from(new Set(variants));
+}
+
+function parseDateFromKey(key: string): number | null {
+  const match = key.match(/^(\d{2})-(\d{2})-(\d{2})\//);
+  if (!match) return null;
+  const month = Number(match[1]);
+  const day = Number(match[2]);
+  const year = 2000 + Number(match[3]);
+  if (!Number.isFinite(month) || !Number.isFinite(day) || !Number.isFinite(year)) return null;
+  return Date.UTC(year, month - 1, day);
+}
+
+function pickBestCandidate(candidates: string[], preferredTarget?: string | null): string | null {
+  if (!candidates.length) return null;
+  const normalizedTarget = normalizeReportTargetValue(preferredTarget);
+  const scored = candidates.map(k => {
+    const dateScore = parseDateFromKey(k) ?? 0;
+    const targetScore = normalizedTarget && k.includes(`/${normalizedTarget}/`) ? 1 : 0;
+    const htmlScore = /\/result\.html$/i.test(k) ? 1 : 0;
+    return { key: k, dateScore, targetScore, htmlScore };
+  });
+  scored.sort((a, b) => {
+    if (a.dateScore !== b.dateScore) return b.dateScore - a.dateScore;
+    if (a.targetScore !== b.targetScore) return b.targetScore - a.targetScore;
+    if (a.htmlScore !== b.htmlScore) return b.htmlScore - a.htmlScore;
+    return 0;
+  });
+  return scored[0]?.key || null;
+}
+
+async function s3ObjectExists(key: string): Promise<boolean> {
+  const url = presignS3GetUrl(key, 300) || s3UrlForKey(key);
+  try {
+    const resp = await fetch(url, { method: 'GET', headers: { Range: 'bytes=0-0' } });
+    return resp.ok || resp.status === 206 || resp.status === 416;
+  } catch {
+    return false;
+  }
+}
+
+async function resolveS3Key(candidates: string[]): Promise<string | null> {
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    if (await s3ObjectExists(candidate)) return candidate;
+  }
+  return null;
 }
 
 function startOfWeekISO(date: Date) {
@@ -874,13 +1125,62 @@ app.post('/api/env-health/sync', async (_req, res) => {
 app.post('/api/results/fetch-json', async (req, res) => {
   const { key } = req.body as { key?: string };
   if (!key) return res.status(400).json({ message: 'key is required (e.g. 11-24-25:B/test.json)' });
-  const candidateKeys = Array.from(
-    new Set([
-      key,
-      key.endsWith('.zip') ? key : `${key}.zip`,
-      key.endsWith('.gz') ? key : `${key}.gz`
-    ])
+  const baseKey = key.replace(/(\.zip|\.gz)$/i, '');
+  const swappedBase = swapReportTargetInKey(baseKey);
+  const baseKeys = [baseKey, ...(swappedBase ? [swappedBase] : [])];
+  const jobPath = extractJobPathFromJobUrl(process.env.JENKINS_JOB_URL);
+  const jobPathKeys = Array.from(new Set(baseKeys.map(k => applyJobPathToKey(k, jobPath)).filter(Boolean))) as string[];
+  const expandedBaseKeys = Array.from(
+    new Set([...baseKeys, ...jobPathKeys].flatMap(k => expandDateVariants(k)))
   );
+
+  const expandKey = (k: string): string[] => {
+    const variants = [k];
+    if (!k.endsWith('.zip')) variants.push(`${k}.zip`);
+    if (!k.endsWith('.gz')) variants.push(`${k}.gz`);
+    return variants;
+  };
+
+  const altJsonKeys = (k: string): string[] => {
+    if (/test\.json$/i.test(k)) {
+      return [k.replace(/test\.json$/i, 'cucumber.json')];
+    }
+    return [];
+  };
+
+  const candidateKeys = Array.from(
+    new Set(
+      expandedBaseKeys.flatMap(k => [
+        ...expandKey(k),
+        ...altJsonKeys(k).flatMap(alt => expandKey(alt))
+      ])
+    )
+  );
+
+  const prefixes = Array.from(
+    new Set(
+      expandedBaseKeys.map(k =>
+        k.replace(/\/?(test|cucumber)\.json(\.gz|\.zip)?$/i, '')
+      )
+    )
+  );
+  const xmlCandidates = Array.from(
+    new Set(
+      prefixes
+        .flatMap(prefix => [
+          `${prefix}/cucumber-junit.xml`,
+          `${prefix}/testng-results.xml`,
+          `${prefix}/TEST-TestSuite.xml`,
+          `${prefix}/test-output/testng-results.xml`,
+          `${prefix}/test-output/TEST-TestSuite.xml`,
+          `${prefix}/junitreports/TEST-TestSuite.xml`,
+          `${prefix}/test-output/junitreports/TEST-nbc_WP.cucumberOptions.TestRunner.xml`,
+          `${prefix}/junitreports/TEST-nbc_WP.cucumberOptions.TestRunner.xml`
+        ])
+        .flatMap(p => expandDateVariants(p))
+    )
+  );
+
 
   const attempts: any[] = [];
   let parsed: { data: any[]; raw: any; note?: string; usedKey: string; url: string } | null = null;
@@ -912,11 +1212,69 @@ app.post('/api/results/fetch-json', async (req, res) => {
   }
 
   if (!parsed) {
-    return res.status(502).json({
-      message: 'Unable to fetch or parse test.json (tried json, gz, and zip variants).',
-      attempts
+
+    const xmlSummary = await fetchXmlSummary(xmlCandidates);
+    if (!xmlSummary) {
+      return res.status(502).json({
+        message: 'Unable to fetch or parse test.json (tried json, gz, and zip variants).',
+        attempts
+      });
+    }
+    console.info(`[results] xml-summary used for ${baseKey} from ${xmlSummary.usedKey}`);
+
+    const nowIso = new Date().toISOString();
+    const prefix = xmlSummary.usedKey.replace(/\/[^/]+$/, '');
+    const resultLink = presignS3GetUrl(`${prefix}/result.html`) || s3UrlForKey(`${prefix}/result.html`);
+    const runs = loadResultRuns();
+    const existingIdx = runs.findIndex(r => r.key === baseKey);
+    const id = existingIdx >= 0 ? runs[existingIdx].id : `${Date.now()}`;
+    const createdAt = existingIdx >= 0 ? runs[existingIdx].createdAt : nowIso;
+    const entry: StoredResultRun = {
+      id,
+      name: runs[existingIdx]?.name || baseKey,
+      key: baseKey,
+      resultUrl: resultLink,
+      data: [],
+      createdAt,
+      passed: xmlSummary.summary.passed,
+      failed: xmlSummary.summary.failed,
+      skipped: xmlSummary.summary.skipped,
+      total: xmlSummary.summary.total
+    };
+    if (existingIdx >= 0) {
+      runs[existingIdx] = entry;
+    } else {
+      runs.push(entry);
+    }
+    saveResultRuns(runs);
+
+    return res.json({
+      key: baseKey,
+      url: xmlSummary.url,
+      saved: true,
+      data: [],
+      resultUrl: resultLink,
+      runId: id,
+      summary: xmlSummary.summary,
+      note: 'xml-summary'
     });
   }
+
+  let summary: { total: number; passed: number; failed: number; skipped: number } | null = null;
+  let summarySource: string | null = null;
+  const statusCounts = countStatuses(Array.isArray(parsed.data) ? parsed.data : []);
+  if (statusCounts.total > 0) {
+    summary = statusCounts;
+    summarySource = 'data';
+  } else {
+    const xmlSummary = await fetchXmlSummary(xmlCandidates);
+    if (xmlSummary) {
+      summary = xmlSummary.summary;
+      summarySource = `xml:${xmlSummary.usedKey}`;
+      console.info(`[results] xml-summary used for ${parsed.usedKey} from ${xmlSummary.usedKey}`);
+    }
+  }
+
 
   ensureLatestTestFile();
   fs.writeFileSync(latestTestFile, JSON.stringify(parsed.data ?? parsed.raw ?? [], null, 2), 'utf8');
@@ -935,7 +1293,11 @@ app.post('/api/results/fetch-json', async (req, res) => {
     key: parsed.usedKey,
     resultUrl: resultLink,
     data: parsed.data,
-    createdAt
+    createdAt,
+    passed: summary?.passed,
+    failed: summary?.failed,
+    skipped: summary?.skipped,
+    total: summary?.total
   };
   if (existingIdx >= 0) {
     runs[existingIdx] = entry;
@@ -952,7 +1314,9 @@ app.post('/api/results/fetch-json', async (req, res) => {
     resultUrl: resultLink,
     runId: id,
     note: parsed.note,
-    attempts
+    attempts,
+    summary,
+    summarySource
   });
 });
 
@@ -1214,11 +1578,48 @@ app.get('/api/results/latest-json', (_req, res) => {
   }
 });
 
-app.get('/api/results/result-url', (req, res) => {
+app.get('/api/results/result-url', async (req, res) => {
   const key = req.query.key as string;
   if (!key) return res.status(400).json({ message: 'key is required (e.g. 11-24-25:B/result.html)' });
-  const url = presignS3GetUrl(key) || s3UrlForKey(key);
-  res.json({ key, url });
+
+  const baseKey = /test\.json(\.gz|\.zip)?$/i.test(key) ? key.replace(/test\.json(\.gz|\.zip)?$/i, 'result.html') : key;
+  const preferredTarget = normalizeReportTargetValue(process.env.JENKINS_REPORT_TARGET || process.env.REPORT_TARGET);
+  const preferredKey = applyReportTargetToKey(baseKey, preferredTarget);
+  const jobPath = extractJobPathFromJobUrl(process.env.JENKINS_JOB_URL);
+  const jobPathKey = applyJobPathToKey(baseKey, jobPath);
+  const jobPathPreferredKey = preferredKey ? applyJobPathToKey(preferredKey, jobPath) : null;
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+  const pushUnique = (k: string) => {
+    if (!k || seen.has(k)) return;
+    seen.add(k);
+    candidates.push(k);
+  };
+  const addReportVariants = (k: string) => {
+    for (const variant of expandDateVariants(k)) {
+      pushUnique(variant);
+      if (/\/result\.html$/i.test(variant)) {
+        pushUnique(variant.replace(/\/result\.html$/i, '/test-output/index.html'));
+        pushUnique(variant.replace(/\/result\.html$/i, '/emailable-report.html'));
+      }
+    }
+  };
+
+  if (jobPathPreferredKey && jobPathPreferredKey !== baseKey) addReportVariants(jobPathPreferredKey);
+  if (jobPathKey && jobPathKey !== baseKey) addReportVariants(jobPathKey);
+  if (preferredKey && preferredKey !== baseKey) addReportVariants(preferredKey);
+  addReportVariants(baseKey);
+  const swapped = swapReportTargetInKey(baseKey);
+  if (swapped) addReportVariants(swapped);
+
+  const resolvedKey =
+    (await resolveS3Key(candidates)) ||
+    pickBestCandidate(candidates, preferredTarget) ||
+    preferredKey ||
+    swapped ||
+    baseKey;
+  const url = presignS3GetUrl(resolvedKey) || s3UrlForKey(resolvedKey);
+  res.json({ key, url, resolvedKey });
 });
 
 // Result runs storage (full test.json with result link)
@@ -1247,6 +1648,55 @@ app.post('/api/result-runs', (req, res) => {
   runs.push(entry);
   saveResultRuns(runs);
   res.status(201).json(entry);
+});
+
+// Accept a summary-only payload (from Jenkins) when JSON artifacts are missing.
+app.post('/api/results/upload-summary', (req, res) => {
+  const { key, name, resultUrl, passed, failed, skipped, total, createdAt } = req.body as {
+    key?: string;
+    name?: string;
+    resultUrl?: string;
+    passed?: number;
+    failed?: number;
+    skipped?: number;
+    total?: number;
+    createdAt?: string;
+  };
+  if (!key) return res.status(400).json({ message: 'key is required' });
+
+  const safePassed = Number(passed ?? 0) || 0;
+  const safeFailed = Number(failed ?? 0) || 0;
+  const safeSkipped = Number(skipped ?? 0) || 0;
+  const safeTotal = Number(total ?? safePassed + safeFailed + safeSkipped) || 0;
+
+  const existing = db.prepare('SELECT id, createdAt, name, resultUrl FROM test_runs WHERE key = ?').get(key) as
+    | { id: string; createdAt: string; name?: string; resultUrl?: string }
+    | undefined;
+  const id = existing?.id || `${Date.now()}`;
+  const createdAtIso = existing?.createdAt || createdAt || new Date().toISOString();
+
+  upsertResultRunToDb({
+    id,
+    name: name || existing?.name || key,
+    key,
+    resultUrl: resultUrl || existing?.resultUrl,
+    createdAt: createdAtIso,
+    data: undefined,
+    passed: safePassed,
+    failed: safeFailed,
+    skipped: safeSkipped,
+    total: safeTotal
+  });
+
+  res.status(201).json({
+    saved: true,
+    key,
+    runId: id,
+    passed: safePassed,
+    failed: safeFailed,
+    skipped: safeSkipped,
+    total: safeTotal
+  });
 });
 
 // Jenkins trigger proxy (buildWithParameters)
@@ -1457,32 +1907,98 @@ app.get('/api/jenkins/build', async (req, res) => {
         }
       }
     }
+    const paramMap = new Map<string, any>();
+    for (const p of parameters || []) {
+      if (p?.name) paramMap.set(String(p.name), p.value);
+    }
+
     let runPrefix =
-      parameters.find((p: any) => p?.name === 'RUN_PREFIX')?.value ||
-      parameters.find((p: any) => p?.name === 'ARTIFACT_PREFIX')?.value ||
+      paramMap.get('RUN_PREFIX') ||
+      paramMap.get('ARTIFACT_PREFIX') ||
       null;
 
-    // Fallback: compute prefix from build info (date/job/number) to mirror pipeline folder structure
-    if (!runPrefix) {
+    const normalizeReportTarget = (value: any): string | null => {
+      if (value === undefined || value === null) return null;
+      const raw = String(value).trim();
+      if (!raw) return null;
+      const lowered = raw.toLowerCase().replace(/\s+/g, '_');
+      if (/(mobile|mw)/.test(lowered)) return 'mobile_web';
+      if (/(desktop|dw)/.test(lowered)) return 'desktop_web';
+      return lowered;
+    };
+
+    const deviceType = paramMap.get('DEVICE_TYPE');
+    const preferredTarget =
+      normalizeReportTarget(paramMap.get('REPORT_TARGET')) ||
+      normalizeReportTarget(process.env.JENKINS_REPORT_TARGET || process.env.REPORT_TARGET);
+    const deviceTarget = normalizeReportTarget(deviceType);
+    const candidateTargets = Array.from(
+      new Set([preferredTarget, deviceTarget, 'mobile_web', 'desktop_web'].filter(Boolean) as string[])
+    );
+
+    const buildMeta = (() => {
       try {
         const urlObj = new URL(buildUrl);
         const parts = urlObj.pathname.split('/').filter(Boolean);
-        const jobIdx = parts.indexOf('job');
-        const jobName = jobIdx >= 0 && parts[jobIdx + 1] ? parts[jobIdx + 1] : null;
-        const buildNumber =
-          data?.number ??
-          (parts.length ? Number(parts[parts.length - 1]) : undefined);
-        const ts = data?.timestamp;
-        if (jobName && buildNumber && ts) {
-          const d = new Date(ts);
-          const mm = String(d.getMonth() + 1).padStart(2, '0');
-          const dd = String(d.getDate()).padStart(2, '0');
-          const yy = String(d.getFullYear()).slice(-2);
-          const datePart = `${mm}-${dd}-${yy}`;
-          runPrefix = `${datePart}/desktop_web/${jobName}/${buildNumber}/reports`;
+        const jobSegments: string[] = [];
+        for (let i = 0; i < parts.length; i += 1) {
+          if (parts[i] === 'job' && parts[i + 1]) {
+            jobSegments.push(parts[i + 1]);
+          }
         }
+        const jobName = jobSegments.length ? jobSegments.join('/') : null;
+        const buildNumber = data?.number ?? (parts.length ? Number(parts[parts.length - 1]) : undefined);
+        const ts = data?.timestamp;
+        if (!jobName || !buildNumber || !ts) return null;
+        const d = new Date(ts);
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const dd = String(d.getDate()).padStart(2, '0');
+        const yy = String(d.getFullYear()).slice(-2);
+        return {
+          jobName,
+          buildNumber,
+          datePart: `${mm}-${dd}-${yy}`
+        };
       } catch {
-        // ignore fallback errors
+        return null;
+      }
+    })();
+
+    const buildPrefixForTarget = (target: string) => {
+      if (!buildMeta) return null;
+      return `${buildMeta.datePart}/${target}/${buildMeta.jobName}/${buildMeta.buildNumber}/reports`;
+    };
+
+    const reportArtifactsExist = async (prefix: string): Promise<boolean> => {
+      const keys = [
+        `${prefix}/test.json`,
+        `${prefix}/test.json.gz`,
+        `${prefix}/test.json.zip`,
+        `${prefix}/result.html`
+      ];
+      for (const key of keys) {
+        if (await s3ObjectExists(key)) return true;
+      }
+      return false;
+    };
+
+    // Fallback: compute prefix from build info (date/reportTarget/job/number) to mirror pipeline folder structure
+    if (!runPrefix && buildMeta) {
+      const buildDone = data?.building === false || !!data?.result;
+      if (buildDone) {
+        for (const target of candidateTargets) {
+          const prefix = buildPrefixForTarget(target);
+          if (!prefix) continue;
+          if (await reportArtifactsExist(prefix)) {
+            runPrefix = prefix;
+            break;
+          }
+        }
+      }
+      if (!runPrefix) {
+        const fallbackTarget = preferredTarget || deviceTarget || 'mobile_web';
+        const fallbackPrefix = buildPrefixForTarget(fallbackTarget);
+        if (fallbackPrefix) runPrefix = fallbackPrefix;
       }
     }
 

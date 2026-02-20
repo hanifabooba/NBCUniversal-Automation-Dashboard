@@ -4,6 +4,7 @@
   "scripts": {
     "ng": "ng",
     "start": "ng serve --proxy-config proxy.conf.json",
+    "postinstall": "node scripts/patch-http-proxy.js",
     "build": "ng build",
     "watch": "ng build --watch --configuration development",
     "test": "ng test"
