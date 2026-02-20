@@ -83,16 +83,19 @@ export class TestResultsService {
     return this.http.get('/api/results/latest-json');
   }
 
-  getResultLink(key: string): Observable<{ key: string; url: string }> {
-    return this.http.get<{ key: string; url: string }>('/api/results/result-url', { params: { key } });
+  getResultLink(key: string): Observable<{ key: string; url: string; resolvedKey?: string }> {
+    return this.http.get<{ key: string; url: string; resolvedKey?: string }>('/api/results/result-url', { params: { key } });
   }
 
   getResultRuns(): Observable<ResultRun[]> {
     return this.http.get<ResultRun[]>('/api/result-runs');
   }
 
-  loadRunData(key: string): Observable<{ data: TestResult[]; key: string; resultUrl?: string }> {
-    return this.http.post<{ data: TestResult[]; key: string; resultUrl?: string }>('/api/results/fetch-json', { key });
+  loadRunData(key: string): Observable<{ data: TestResult[]; key: string; resultUrl?: string; summary?: { total: number; passed: number; failed: number; skipped: number } }> {
+    return this.http.post<{ data: TestResult[]; key: string; resultUrl?: string; summary?: { total: number; passed: number; failed: number; skipped: number } }>(
+      '/api/results/fetch-json',
+      { key }
+    );
   }
 
   uploadRunData(payload: { data: TestResult[] | string; key?: string; resultUrl?: string; name?: string }): Observable<{

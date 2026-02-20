@@ -145,10 +145,27 @@ export class TestResultsComponent implements OnInit {
     )`;
   }
 
+  displayRunName(name: string | undefined | null): string {
+    if (!name) return 'Run';
+    const match = name.match(/\b\d{2}-\d{2}-\d{2}\/(?:desktop_web|mobile_web)\b/);
+    return match ? match[0] : name;
+  }
+
   selectRun(run: ResultRun): void {
     this.selectedRunId = run?.id ?? null;
-    this.selectedResultUrl =
-      run?.hasResultHtml && run?.key ? `/api/results/result-html?key=${encodeURIComponent(run.key)}` : run?.resultUrl || null;
+    this.selectedResultUrl = null;
+    this.resolveResultUrl(run);
+    if (run && (run.total || run.passed || run.failed || run.skipped) && (!run.data || !run.data.length)) {
+      this.currentSummary = {
+        name: run.name,
+        passed: run.passed || 0,
+        failed: run.failed || 0,
+        skipped: run.skipped || 0,
+        total: run.total || 0
+      };
+      this.error.set(null);
+      return;
+    }
     if (run?.data && run.data.length) {
       this.currentSummary = this.computeSummary(run.data, run.name);
       return;
@@ -191,6 +208,47 @@ export class TestResultsComponent implements OnInit {
     return null;
   }
 
+  private deriveResultHtmlKey(run: ResultRun | null | undefined): string | null {
+    if (!run) return null;
+    if (run.key) {
+      return run.key.replace(/test\.json(\.gz|\.zip)?$/i, 'result.html');
+    }
+    if (run.resultUrl) {
+      try {
+        const url = new URL(run.resultUrl);
+        const path = url.pathname.replace(/^\//, '');
+        return decodeURIComponent(path);
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  private resolveResultUrl(run: ResultRun | null | undefined): void {
+    if (!run) {
+      this.selectedResultUrl = null;
+      return;
+    }
+    if (run?.hasResultHtml && run?.key) {
+      this.selectedResultUrl = `/api/results/result-html?key=${encodeURIComponent(run.key)}`;
+      return;
+    }
+    const resultKey = this.deriveResultHtmlKey(run);
+    if (!resultKey) {
+      this.selectedResultUrl = run?.resultUrl || null;
+      return;
+    }
+    this.testResults.getResultLink(resultKey).subscribe({
+      next: resp => {
+        this.selectedResultUrl = resp?.url || run?.resultUrl || null;
+      },
+      error: () => {
+        this.selectedResultUrl = run?.resultUrl || null;
+      }
+    });
+  }
+
   private fetchRunData(run: ResultRun, key: string): void {
     this.runLoading.set(true);
     this.error.set(null);
@@ -201,21 +259,46 @@ export class TestResultsComponent implements OnInit {
           ...run,
           data: results,
           key: resp?.key || run.key,
-          resultUrl: resp?.resultUrl || run.resultUrl
+          resultUrl: resp?.resultUrl || run.resultUrl,
+          passed: resp?.summary?.passed ?? run.passed,
+          failed: resp?.summary?.failed ?? run.failed,
+          skipped: resp?.summary?.skipped ?? run.skipped,
+          total: resp?.summary?.total ?? run.total
         };
         this.resultRuns = this.resultRuns.map(r => (r.id === run.id ? updatedRun : r));
         this.selectedResultUrl =
           updatedRun?.hasResultHtml && updatedRun?.key
             ? `/api/results/result-html?key=${encodeURIComponent(updatedRun.key)}`
             : updatedRun.resultUrl || this.selectedResultUrl;
-        this.applySummary(results, updatedRun.name);
+        if (results.length) {
+          this.applySummary(results, updatedRun.name);
+        } else if (updatedRun.total || updatedRun.passed || updatedRun.failed || updatedRun.skipped) {
+          this.currentSummary = {
+            name: updatedRun.name,
+            passed: updatedRun.passed || 0,
+            failed: updatedRun.failed || 0,
+            skipped: updatedRun.skipped || 0,
+            total: updatedRun.total || 0
+          };
+        }
         this.runLoading.set(false);
       },
       error: err => {
         const msg = err?.error?.message || 'Unable to load test.json for this run.';
         this.runLoading.set(false);
-        this.error.set(msg);
-        this.currentSummary = { name: run?.name || 'Run', passed: 0, failed: 0, skipped: 0, total: 0 };
+        if (run && (run.total || run.passed || run.failed || run.skipped)) {
+          this.error.set(null);
+          this.currentSummary = {
+            name: run.name || 'Run',
+            passed: run.passed || 0,
+            failed: run.failed || 0,
+            skipped: run.skipped || 0,
+            total: run.total || 0
+          };
+        } else {
+          this.error.set(msg);
+          this.currentSummary = { name: run?.name || 'Run', passed: 0, failed: 0, skipped: 0, total: 0 };
+        }
       }
     });
   }

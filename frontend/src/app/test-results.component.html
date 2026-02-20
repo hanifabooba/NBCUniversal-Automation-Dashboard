@@ -56,7 +56,7 @@
       <div class="pie-wrap">
         <div class="text-center mb-2">
           <p class="eyebrow text-uppercase">Current run</p>
-          <h2 class="h5 mb-1">{{ currentSummary.name }}</h2>
+          <h2 class="h5 mb-1">{{ displayRunName(currentSummary.name) }}</h2>
           <div class="text-muted small">{{ currentSummary.total }} tests</div>
         </div>
         <div class="pie" [style.background]="pieStyle(currentSummary)">
