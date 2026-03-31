@@ -1,0 +1,154 @@
+<section class="weekly-status-page py-4 py-lg-5">
+  <div class="container">
+    <div class="hero-card mb-4">
+      <div class="hero-card__content">
+        <div>
+          <p class="hero-card__eyebrow mb-1">Automation weekly status</p>
+          <h1 class="hero-card__title mb-2">Weekly automation board</h1>
+          <p class="hero-card__copy mb-0">
+            Monday through Friday execution reporting with manual reruns, export, and report-link visibility.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div class="card shadow-sm mb-4">
+      <div class="card-body">
+        <div class="filter-grid">
+          <div>
+            <label class="form-label small text-uppercase text-muted">Week picker</label>
+            <input
+              type="date"
+              class="form-control"
+              [ngModel]="selectedWeekInput"
+              (ngModelChange)="onWeekChange($event)"
+            >
+            <div class="form-text">Normalized to Monday-Friday. Current selection: {{ boardLabel }}</div>
+          </div>
+
+          <div>
+            <label class="form-label small text-uppercase text-muted">Platform</label>
+            <select class="form-select" [(ngModel)]="filterPlatform" (ngModelChange)="refresh()">
+              <option *ngFor="let option of platformOptions" [value]="option.value">{{ option.label }}</option>
+            </select>
+          </div>
+
+          <div>
+            <label class="form-label small text-uppercase text-muted">Suite</label>
+            <select class="form-select" [(ngModel)]="filterSuite" (ngModelChange)="refresh()">
+              <option *ngFor="let option of suiteOptions" [value]="option.value">{{ option.label }}</option>
+            </select>
+          </div>
+
+          <div>
+            <label class="form-label small text-uppercase text-muted">Execution type</label>
+            <select class="form-select" [(ngModel)]="filterExecutionType" (ngModelChange)="refresh()">
+              <option *ngFor="let option of executionOptions" [value]="option.value">{{ option.label }}</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="action-row mt-3">
+          <button type="button" class="btn btn-outline-secondary" (click)="refresh()" [disabled]="loading">
+            {{ loading ? 'Refreshing…' : 'Refresh' }}
+          </button>
+          <button type="button" class="btn btn-outline-dark" (click)="exportBoard()" [disabled]="exporting">
+            {{ exporting ? 'Exporting…' : 'Export to Excel' }}
+          </button>
+          <button type="button" class="btn btn-success" (click)="runWeeklyJobs()" [disabled]="runningAllJobs || !!runningJobId">
+            {{ runningAllJobs ? 'Triggering weekly jobs…' : 'Run Weekly Jobs Now' }}
+          </button>
+          <button
+            type="button"
+            class="btn btn-outline-success"
+            *ngFor="let job of weeklyJobs"
+            (click)="runWeeklyJob(job.id, job.label)"
+            [disabled]="runningAllJobs || !!runningJobId"
+          >
+            {{ isRunningJob(job.id) ? 'Triggering…' : job.label }}
+          </button>
+        </div>
+
+        <div class="alert alert-danger mt-3 mb-0" *ngIf="error">{{ error }}</div>
+        <div class="alert alert-success mt-3 mb-0" *ngIf="info">{{ info }}</div>
+      </div>
+    </div>
+
+    <div class="summary-grid mb-4">
+      <article class="summary-card summary-card--scripts shadow-sm">
+        <div class="summary-card__label">Total automated scripts</div>
+        <div class="summary-card__value">{{ summary.totalAutomated }}</div>
+      </article>
+      <article class="summary-card summary-card--passed shadow-sm">
+        <div class="summary-card__label">Total passed</div>
+        <div class="summary-card__value">{{ summary.passed }}</div>
+      </article>
+      <article class="summary-card summary-card--failed shadow-sm">
+        <div class="summary-card__label">Total failed</div>
+        <div class="summary-card__value">{{ summary.failed }}</div>
+      </article>
+      <article class="summary-card summary-card--rate shadow-sm">
+        <div class="summary-card__label">Overall passing rate</div>
+        <div class="summary-card__value">{{ formatPercent(summary.passRate) }}</div>
+      </article>
+    </div>
+
+    <div class="card shadow-sm">
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-hover align-middle weekly-status-table mb-0">
+            <thead>
+              <tr>
+                <th>SN</th>
+                <th>Platform</th>
+                <th>Suite</th>
+                <th>Test Cases</th>
+                <th>Application Coverage</th>
+                <th>Automation Scripts</th>
+                <th>Coverage %</th>
+                <th>Execution</th>
+                <th>Passed</th>
+                <th>Failed</th>
+                <th>Passing Rate</th>
+                <th>Executed Week</th>
+                <th>Results Link</th>
+                <th>Job Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr *ngIf="!rows.length && !loading">
+                <td colspan="14" class="text-center text-muted py-5">No rows matched the selected filters.</td>
+              </tr>
+              <tr *ngFor="let row of rows; trackBy: trackByRow">
+                <td>{{ row.sn }}</td>
+                <td>{{ row.platform }}</td>
+                <td>
+                  <div class="fw-semibold">{{ row.suite }}</div>
+                  <div class="small text-muted">{{ row.label }}</div>
+                </td>
+                <td>{{ row.testCases }}</td>
+                <td>{{ formatPercent(row.applicationCoverage) }}</td>
+                <td>{{ row.automationScripts }}</td>
+                <td>{{ formatPercent(row.coveragePercent) }}</td>
+                <td>{{ row.execution }}</td>
+                <td>{{ row.jobStatus === 'NOT_RUN' ? '—' : row.passed }}</td>
+                <td>{{ row.jobStatus === 'NOT_RUN' ? '—' : row.failed }}</td>
+                <td>{{ formatPercent(row.passingRate) }}</td>
+                <td>{{ boardLabel }}</td>
+                <td>
+                  <a *ngIf="row.resultsLink; else noResult" [href]="row.resultsLink" target="_blank" rel="noreferrer" class="btn btn-sm btn-outline-primary">
+                    View report
+                  </a>
+                  <ng-template #noResult>—</ng-template>
+                </td>
+                <td>
+                  <span class="badge" [ngClass]="badgeClass(row.jobStatus)">{{ row.jobStatus }}</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>

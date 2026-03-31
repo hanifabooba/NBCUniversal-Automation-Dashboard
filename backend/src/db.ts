@@ -109,6 +109,51 @@ db.prepare(`
   );
 `).run();
 
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS weekly_automation_executions (
+    id TEXT PRIMARY KEY,
+    boardId TEXT NOT NULL,
+    jobId TEXT,
+    label TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    suite TEXT NOT NULL,
+    tag TEXT,
+    environment TEXT,
+    browser TEXT,
+    deviceType TEXT,
+    executionType TEXT NOT NULL,
+    executedAt TEXT NOT NULL,
+    executedWeekStart TEXT NOT NULL,
+    executedWeekEnd TEXT NOT NULL,
+    totalAutomated INTEGER DEFAULT 0,
+    passed INTEGER DEFAULT 0,
+    failed INTEGER DEFAULT 0,
+    passRate REAL DEFAULT 0,
+    testCases INTEGER DEFAULT 0,
+    applicationCoverage REAL,
+    automationScripts INTEGER DEFAULT 0,
+    coveragePercent REAL DEFAULT 0,
+    resultsLink TEXT,
+    queueId INTEGER,
+    queueUrl TEXT,
+    buildUrl TEXT,
+    buildNumber INTEGER,
+    runPrefix TEXT,
+    status TEXT NOT NULL,
+    errorMessage TEXT
+  );
+`).run();
+
+db.prepare(`
+  CREATE INDEX IF NOT EXISTS idx_weekly_exec_week
+  ON weekly_automation_executions (executedWeekStart, executedWeekEnd, platform, suite, executionType, executedAt);
+`).run();
+
+db.prepare(`
+  CREATE INDEX IF NOT EXISTS idx_weekly_exec_queue
+  ON weekly_automation_executions (queueId);
+`).run();
+
 // Lightweight migrations for older DBs (SQLite doesn't support IF NOT EXISTS on columns)
 function ensureTestRunsSchema() {
   const columns = db

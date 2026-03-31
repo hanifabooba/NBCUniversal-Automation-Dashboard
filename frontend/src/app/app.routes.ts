@@ -23,6 +23,7 @@ import { DashboardComponent } from './dashboard.component';
 import { TestResultsComponent } from './test-results.component';
 import { TeamWeeklyTaskComponent } from './team-weekly-task.component';
 import { TestCasesHubComponent } from './test-cases-hub.component';
+import { AutomationWeeklyStatusPageComponent } from './automation-weekly-status-page.component';
 
 export const appRoutes: Routes = [
   { path: '', component: HomeComponent },
@@ -39,7 +40,7 @@ export const appRoutes: Routes = [
   { path: 'track/:id', component: OrderTrackingComponent },
   { path: 'fulfillment', component: FulfillmentComponent },
   { path: 'releaseboard', component: OrderFulfillmentBoardComponent },
-  { path: 'automation-weekly-status', component: OrderHistoryComponent },
+  { path: 'automation-weekly-status', component: AutomationWeeklyStatusPageComponent },
   { path: 'team-weekly-task', component: TeamWeeklyTaskComponent },
   { path: 'test-cases-hub', component: TestCasesHubComponent },
   { path: 'release-history', redirectTo: 'automation-weekly-status' },

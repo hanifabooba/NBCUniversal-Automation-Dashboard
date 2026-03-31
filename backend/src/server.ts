@@ -9,6 +9,19 @@ import path from 'path';
 import { db, stageToStatus } from './db';
 import crypto from 'crypto';
 import zlib from 'zlib';
+import {
+  WEEKLY_AUTOMATION_JOBS,
+  WEEKLY_STATUS_BOARD_DEFINITIONS,
+  WeeklyAutomationJobDefinition,
+  WeeklyExecutionType,
+  WeeklyJobStatus,
+  WeeklyPlatform,
+  WeeklySuite,
+  findWeeklyBoardDefinitionById,
+  findWeeklyBoardDefinitionByTag,
+  findWeeklyJobDefinitionById,
+  resolveWorkingWeekRange
+} from './weekly-status';
 
 const app = express();
 app.use(cors());
@@ -18,6 +31,8 @@ app.get('/api/health', (_req, res) => res.json({ ok: true, time: new Date().toIS
 
 type OrderStage = 'orders' | 'preparing' | 'assign' | 'inroute' | 'delivered';
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret';
+const APP_PORT = Number(process.env.PORT || 3000);
+const INTERNAL_BASE_URL = process.env.INTERNAL_BASE_URL || `http://127.0.0.1:${APP_PORT}`;
 
 interface DbUser {
   id: number;
@@ -623,6 +638,66 @@ type StoredResultRun = {
   reportZip?: Buffer;
 };
 
+type StoredWeeklyExecution = {
+  id: string;
+  boardId: string;
+  jobId?: string;
+  label: string;
+  platform: WeeklyPlatform;
+  suite: WeeklySuite;
+  tag?: string;
+  environment?: string;
+  browser?: string;
+  deviceType?: string;
+  executionType: WeeklyExecutionType;
+  executedAt: string;
+  executedWeekStart: string;
+  executedWeekEnd: string;
+  totalAutomated: number;
+  passed: number;
+  failed: number;
+  passRate: number;
+  testCases: number;
+  applicationCoverage?: number | null;
+  automationScripts: number;
+  coveragePercent: number;
+  resultsLink?: string;
+  queueId?: number;
+  queueUrl?: string;
+  buildUrl?: string;
+  buildNumber?: number;
+  runPrefix?: string;
+  status: WeeklyJobStatus;
+  errorMessage?: string;
+};
+
+type WeeklyBoardRow = {
+  id: string;
+  sn: number;
+  platform: string;
+  suite: string;
+  testCases: number;
+  applicationCoverage?: number | null;
+  automationScripts: number;
+  coveragePercent: number;
+  execution: WeeklyExecutionType | '—';
+  passed: number;
+  failed: number;
+  passingRate: number;
+  executedWeek: string;
+  resultsLink?: string;
+  jobStatus: string;
+  label: string;
+  executedAt?: string;
+};
+
+type WeeklyStatusSummary = {
+  totalAutomated: number;
+  passed: number;
+  failed: number;
+  passRate: number;
+};
+
 function loadEnvHealth(): EnvRun[] {
   ensureEnvHealthFile();
   try {
@@ -786,6 +861,293 @@ function saveResultRuns(runs: StoredResultRun[]) {
   for (const run of runs || []) {
     upsertResultRunToDb(run);
   }
+}
+
+function toFiniteNumber(value: unknown, fallback = 0): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function toNullableNumber(value: unknown): number | null {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function computePassRate(passed: number, failed: number, fallback = 0): number {
+  const total = Math.max(0, passed + failed);
+  if (total === 0) return toFiniteNumber(fallback, 0);
+  return Number(((passed / total) * 100).toFixed(2));
+}
+
+function mapWeeklyExecutionRow(row: any): StoredWeeklyExecution {
+  return {
+    id: String(row.id),
+    boardId: String(row.boardId),
+    jobId: row.jobId ? String(row.jobId) : undefined,
+    label: String(row.label),
+    platform: String(row.platform) as WeeklyPlatform,
+    suite: String(row.suite) as WeeklySuite,
+    tag: row.tag ? String(row.tag) : undefined,
+    environment: row.environment ? String(row.environment) : undefined,
+    browser: row.browser ? String(row.browser) : undefined,
+    deviceType: row.deviceType ? String(row.deviceType) : undefined,
+    executionType: String(row.executionType) as WeeklyExecutionType,
+    executedAt: String(row.executedAt),
+    executedWeekStart: String(row.executedWeekStart),
+    executedWeekEnd: String(row.executedWeekEnd),
+    totalAutomated: toFiniteNumber(row.totalAutomated),
+    passed: toFiniteNumber(row.passed),
+    failed: toFiniteNumber(row.failed),
+    passRate: toFiniteNumber(row.passRate),
+    testCases: toFiniteNumber(row.testCases),
+    applicationCoverage: row.applicationCoverage === null || row.applicationCoverage === undefined ? null : toFiniteNumber(row.applicationCoverage),
+    automationScripts: toFiniteNumber(row.automationScripts),
+    coveragePercent: toFiniteNumber(row.coveragePercent),
+    resultsLink: row.resultsLink ? String(row.resultsLink) : undefined,
+    queueId: row.queueId === null || row.queueId === undefined ? undefined : toFiniteNumber(row.queueId),
+    queueUrl: row.queueUrl ? String(row.queueUrl) : undefined,
+    buildUrl: row.buildUrl ? String(row.buildUrl) : undefined,
+    buildNumber: row.buildNumber === null || row.buildNumber === undefined ? undefined : toFiniteNumber(row.buildNumber),
+    runPrefix: row.runPrefix ? String(row.runPrefix) : undefined,
+    status: String(row.status || 'NOT_RUN') as WeeklyJobStatus,
+    errorMessage: row.errorMessage ? String(row.errorMessage) : undefined
+  };
+}
+
+function getWeeklyExecution(id: string): StoredWeeklyExecution | undefined {
+  const row = db.prepare('SELECT * FROM weekly_automation_executions WHERE id = ?').get(id) as any;
+  return row ? mapWeeklyExecutionRow(row) : undefined;
+}
+
+function listWeeklyExecutions(weekStart: string, weekEnd: string): StoredWeeklyExecution[] {
+  const rows = db
+    .prepare(
+      `SELECT *
+       FROM weekly_automation_executions
+       WHERE executedWeekStart = ? AND executedWeekEnd = ?
+       ORDER BY datetime(executedAt) DESC, rowid DESC`
+    )
+    .all(weekStart, weekEnd) as any[];
+  return rows.map(mapWeeklyExecutionRow);
+}
+
+function upsertWeeklyExecutionToDb(run: StoredWeeklyExecution): StoredWeeklyExecution {
+  const boardDef =
+    findWeeklyBoardDefinitionById(run.boardId) ||
+    findWeeklyBoardDefinitionById(findWeeklyJobDefinitionById(run.jobId)?.boardId) ||
+    findWeeklyBoardDefinitionByTag(run.tag, run.deviceType);
+  if (!boardDef) {
+    throw new Error(`Unable to resolve weekly board definition for ${run.boardId || run.tag || run.id}`);
+  }
+
+  const normalized: StoredWeeklyExecution = {
+    ...run,
+    boardId: boardDef.id,
+    label: run.label || boardDef.suiteLabel,
+    platform: boardDef.platform,
+    suite: boardDef.suite,
+    testCases: toFiniteNumber(run.testCases, boardDef.testCases),
+    applicationCoverage:
+      run.applicationCoverage === null || run.applicationCoverage === undefined
+        ? boardDef.applicationCoverage ?? null
+        : toFiniteNumber(run.applicationCoverage),
+    automationScripts: toFiniteNumber(run.automationScripts, boardDef.automationScripts),
+    coveragePercent: toFiniteNumber(run.coveragePercent, boardDef.coveragePercent),
+    totalAutomated: toFiniteNumber(run.totalAutomated, run.automationScripts || boardDef.automationScripts),
+    passed: toFiniteNumber(run.passed),
+    failed: toFiniteNumber(run.failed),
+    passRate: computePassRate(toFiniteNumber(run.passed), toFiniteNumber(run.failed), run.passRate),
+    status: run.status || 'NOT_RUN'
+  };
+
+  db.prepare(
+    `INSERT INTO weekly_automation_executions (
+       id, boardId, jobId, label, platform, suite, tag, environment, browser, deviceType,
+       executionType, executedAt, executedWeekStart, executedWeekEnd, totalAutomated, passed,
+       failed, passRate, testCases, applicationCoverage, automationScripts, coveragePercent,
+       resultsLink, queueId, queueUrl, buildUrl, buildNumber, runPrefix, status, errorMessage
+     ) VALUES (
+       @id, @boardId, @jobId, @label, @platform, @suite, @tag, @environment, @browser, @deviceType,
+       @executionType, @executedAt, @executedWeekStart, @executedWeekEnd, @totalAutomated, @passed,
+       @failed, @passRate, @testCases, @applicationCoverage, @automationScripts, @coveragePercent,
+       @resultsLink, @queueId, @queueUrl, @buildUrl, @buildNumber, @runPrefix, @status, @errorMessage
+     )
+     ON CONFLICT(id) DO UPDATE SET
+       boardId = @boardId,
+       jobId = @jobId,
+       label = @label,
+       platform = @platform,
+       suite = @suite,
+       tag = @tag,
+       environment = @environment,
+       browser = @browser,
+       deviceType = @deviceType,
+       executionType = @executionType,
+       executedAt = @executedAt,
+       executedWeekStart = @executedWeekStart,
+       executedWeekEnd = @executedWeekEnd,
+       totalAutomated = @totalAutomated,
+       passed = @passed,
+       failed = @failed,
+       passRate = @passRate,
+       testCases = @testCases,
+       applicationCoverage = @applicationCoverage,
+       automationScripts = @automationScripts,
+       coveragePercent = @coveragePercent,
+       resultsLink = @resultsLink,
+       queueId = @queueId,
+       queueUrl = @queueUrl,
+       buildUrl = @buildUrl,
+       buildNumber = @buildNumber,
+       runPrefix = @runPrefix,
+       status = @status,
+       errorMessage = @errorMessage`
+  ).run({
+    ...normalized,
+    applicationCoverage: normalized.applicationCoverage ?? null,
+    resultsLink: normalized.resultsLink ?? null,
+    queueId: normalized.queueId ?? null,
+    queueUrl: normalized.queueUrl ?? null,
+    buildUrl: normalized.buildUrl ?? null,
+    buildNumber: normalized.buildNumber ?? null,
+    runPrefix: normalized.runPrefix ?? null,
+    errorMessage: normalized.errorMessage ?? null
+  });
+
+  return getWeeklyExecution(normalized.id) || normalized;
+}
+
+function saveWeeklyExecutionPatch(id: string, patch: Partial<StoredWeeklyExecution>): StoredWeeklyExecution | undefined {
+  const current = getWeeklyExecution(id);
+  if (!current) return undefined;
+  return upsertWeeklyExecutionToDb({ ...current, ...patch, id });
+}
+
+function buildWeeklyExecutionSeed(input: {
+  id?: string;
+  boardId?: string;
+  jobId?: string;
+  label?: string;
+  tag?: string;
+  environment?: string;
+  browser?: string;
+  deviceType?: string;
+  executionType: WeeklyExecutionType;
+  status: WeeklyJobStatus;
+  executedAt?: string;
+  executedWeekStart: string;
+  executedWeekEnd: string;
+}): StoredWeeklyExecution {
+  const boardDef =
+    findWeeklyBoardDefinitionById(input.boardId) ||
+    findWeeklyBoardDefinitionById(findWeeklyJobDefinitionById(input.jobId)?.boardId) ||
+    findWeeklyBoardDefinitionByTag(input.tag, input.deviceType);
+  if (!boardDef) {
+    throw new Error('Unable to determine weekly status board row for the requested execution.');
+  }
+
+  return {
+    id: input.id || crypto.randomUUID(),
+    boardId: boardDef.id,
+    jobId: input.jobId,
+    label: input.label || boardDef.suiteLabel,
+    platform: boardDef.platform,
+    suite: boardDef.suite,
+    tag: input.tag,
+    environment: input.environment,
+    browser: input.browser,
+    deviceType: input.deviceType,
+    executionType: input.executionType,
+    executedAt: input.executedAt || new Date().toISOString(),
+    executedWeekStart: input.executedWeekStart,
+    executedWeekEnd: input.executedWeekEnd,
+    totalAutomated: boardDef.automationScripts,
+    passed: 0,
+    failed: 0,
+    passRate: 0,
+    testCases: boardDef.testCases,
+    applicationCoverage: boardDef.applicationCoverage ?? null,
+    automationScripts: boardDef.automationScripts,
+    coveragePercent: boardDef.coveragePercent,
+    resultsLink: undefined,
+    queueId: undefined,
+    queueUrl: undefined,
+    buildUrl: undefined,
+    buildNumber: undefined,
+    runPrefix: undefined,
+    status: input.status,
+    errorMessage: undefined
+  };
+}
+
+function buildWeeklyStatusResponse(
+  weekStart: string,
+  weekEnd: string,
+  executions: StoredWeeklyExecution[],
+  filters: { platform?: string; suite?: string; executionType?: string }
+): { summary: WeeklyStatusSummary; rows: WeeklyBoardRow[] } {
+  const normalizedPlatform = String(filters.platform || '').toUpperCase();
+  const normalizedSuite = String(filters.suite || '').toUpperCase();
+  const normalizedExecutionType = String(filters.executionType || '').toUpperCase();
+
+  const filteredExecutions = executions.filter(execution => {
+    if (normalizedPlatform && normalizedPlatform !== 'ALL' && execution.platform !== normalizedPlatform) return false;
+    if (normalizedSuite && normalizedSuite !== 'ALL' && execution.suite !== normalizedSuite) return false;
+    if (normalizedExecutionType && normalizedExecutionType !== 'ALL' && execution.executionType !== normalizedExecutionType) return false;
+    return true;
+  });
+
+  const latestByBoardId = new Map<string, StoredWeeklyExecution>();
+  for (const execution of filteredExecutions) {
+    if (!latestByBoardId.has(execution.boardId)) {
+      latestByBoardId.set(execution.boardId, execution);
+    }
+  }
+
+  const rows = WEEKLY_STATUS_BOARD_DEFINITIONS
+    .filter(def => {
+      if (normalizedPlatform && normalizedPlatform !== 'ALL' && def.platform !== normalizedPlatform) return false;
+      if (normalizedSuite && normalizedSuite !== 'ALL' && def.suite !== normalizedSuite) return false;
+      if (normalizedExecutionType && normalizedExecutionType !== 'ALL' && !def.supportedExecutionTypes.includes(normalizedExecutionType as WeeklyExecutionType)) {
+        return false;
+      }
+      return true;
+    })
+    .map<WeeklyBoardRow>(def => {
+      const latest = latestByBoardId.get(def.id);
+      return {
+        id: def.id,
+        sn: def.sn,
+        platform: def.platformLabel,
+        suite: def.suiteLabel,
+        testCases: def.testCases,
+        applicationCoverage: def.applicationCoverage ?? null,
+        automationScripts: def.automationScripts,
+        coveragePercent: def.coveragePercent,
+        execution: latest?.executionType || (def.supportedExecutionTypes[0] || '—'),
+        passed: latest?.passed ?? 0,
+        failed: latest?.failed ?? 0,
+        passingRate: latest?.passRate ?? 0,
+        executedWeek: `${weekStart} to ${weekEnd}`,
+        resultsLink: latest?.resultsLink,
+        jobStatus: latest?.status || 'NOT_RUN',
+        label: latest?.label || def.suiteLabel,
+        executedAt: latest?.executedAt
+      };
+    });
+
+  const summary = rows.reduce<WeeklyStatusSummary>(
+    (acc, row) => {
+      acc.totalAutomated += row.automationScripts;
+      acc.passed += row.passed;
+      acc.failed += row.failed;
+      return acc;
+    },
+    { totalAutomated: 0, passed: 0, failed: 0, passRate: 0 }
+  );
+  summary.passRate = computePassRate(summary.passed, summary.failed, 0);
+
+  return { summary, rows };
 }
 
 function s3UrlForKey(key: string) {
@@ -1699,93 +2061,482 @@ app.post('/api/results/upload-summary', (req, res) => {
   });
 });
 
-// Jenkins trigger proxy (buildWithParameters)
-app.post('/api/jenkins/trigger', async (req, res) => {
-  const { jobUrl, params, cause } = req.body as { jobUrl?: string; params?: Record<string, string>; cause?: string };
+async function fetchJenkinsCrumb(origin: string, authHeader: string): Promise<{ crumbHeader: Record<string, string>; crumbCookies: string }> {
+  let crumbHeader: Record<string, string> = {};
+  let crumbCookies = '';
+  try {
+    const crumbResp = await fetch(`${origin}/crumbIssuer/api/json`, {
+      headers: { Authorization: authHeader }
+    });
+    if (crumbResp.ok) {
+      const crumbJson = (await crumbResp.json()) as { crumbRequestField?: string; crumb?: string };
+      if (crumbJson.crumbRequestField && crumbJson.crumb) {
+        crumbHeader = { [crumbJson.crumbRequestField]: crumbJson.crumb };
+      }
+      const rawHeaders = (crumbResp.headers as any)?.raw?.();
+      const setCookie = rawHeaders ? rawHeaders['set-cookie'] : undefined;
+      if (Array.isArray(setCookie) && setCookie.length) {
+        crumbCookies = setCookie.map((c: string) => c.split(';')[0]).join('; ');
+      }
+    }
+  } catch (err) {
+    console.warn('Crumb fetch failed, proceeding without crumb:', err);
+  }
+  return { crumbHeader, crumbCookies };
+}
+
+async function triggerJenkinsBuildRequest(input: {
+  jobUrl?: string;
+  params?: Record<string, string>;
+  cause?: string;
+}): Promise<{ queued: true; message: string; queueUrl: string; queueId?: number }> {
   const user = process.env.JENKINS_USER;
   const token = process.env.JENKINS_TOKEN;
   const triggerToken = process.env.JENKINS_TRIGGER_TOKEN;
-  const defaultJobUrl = process.env.JENKINS_JOB_URL || jobUrl || 'https://jenkins.otsops.com/job/POC_QA_DASHBOARD/buildWithParameters';
+  const defaultJobUrl = process.env.JENKINS_JOB_URL || input.jobUrl || 'https://jenkins.otsops.com/job/POC_QA_DASHBOARD/buildWithParameters';
 
-  console.log('[Jenkins trigger] incoming params', { jobUrl: defaultJobUrl, params });
+  console.log('[Jenkins trigger] incoming params', { jobUrl: defaultJobUrl, params: input.params });
 
   if (!user || !token) {
-    return res.status(500).json({ message: 'Jenkins credentials are not configured on the server.' });
+    const err = new Error('Jenkins credentials are not configured on the server.') as Error & { status?: number };
+    err.status = 500;
+    throw err;
   }
   if (!defaultJobUrl) {
-    return res.status(400).json({ message: 'jobUrl is required.' });
+    const err = new Error('jobUrl is required.') as Error & { status?: number };
+    err.status = 400;
+    throw err;
+  }
+
+  const targetUrl = new URL(defaultJobUrl);
+  const origin = `${targetUrl.protocol}//${targetUrl.host}`;
+  const authHeader = 'Basic ' + Buffer.from(`${user}:${token}`).toString('base64');
+  const { crumbHeader, crumbCookies } = await fetchJenkinsCrumb(origin, authHeader);
+
+  const queryParams = new URLSearchParams();
+  if (triggerToken) queryParams.append('token', triggerToken);
+  if (input.cause) queryParams.append('cause', input.cause);
+  const buildUrl = queryParams.toString() ? `${defaultJobUrl}?${queryParams.toString()}` : defaultJobUrl;
+
+  const bodyParams = new URLSearchParams();
+  Object.entries(input.params || {}).forEach(([k, v]) => {
+    if (v !== undefined && v !== null) bodyParams.append(k, v);
+  });
+
+  const triggerResp = await fetch(buildUrl, {
+    method: 'POST',
+    headers: {
+      Authorization: authHeader,
+      'Content-Type': 'application/x-www-form-urlencoded',
+      ...crumbHeader,
+      ...(crumbCookies ? { cookie: crumbCookies } : {})
+    },
+    body: bodyParams.toString()
+  });
+
+  if (!triggerResp.ok) {
+    const text = await triggerResp.text();
+    const snippet = text ? text.slice(0, 4000) : '';
+    console.error('[Jenkins trigger] non-200', triggerResp.status, {
+      url: buildUrl,
+      params: bodyParams.toString(),
+      statusText: triggerResp.statusText,
+      bodySnippet: snippet
+    });
+    const err = new Error('Failed to trigger Jenkins') as Error & {
+      status?: number;
+      statusText?: string;
+      details?: string;
+    };
+    err.status = triggerResp.status;
+    err.statusText = triggerResp.statusText;
+    err.details = snippet;
+    throw err;
+  }
+
+  const queueUrl = triggerResp.headers.get('location') || '';
+  const queueId = queueUrl ? Number(queueUrl.split('/').filter(Boolean).pop()) : undefined;
+  return { queued: true, message: 'Jenkins job triggered', queueUrl, queueId };
+}
+
+async function fetchJenkinsQueueItem(queueId: string | number): Promise<any> {
+  const origin = getJenkinsOrigin();
+  if (!origin) {
+    const err = new Error('JENKINS_JOB_URL not set') as Error & { status?: number };
+    err.status = 500;
+    throw err;
+  }
+  const { authHeader } = getJenkinsAuth();
+  const resp = await fetch(`${origin}/queue/item/${queueId}/api/json`, {
+    headers: { Authorization: authHeader }
+  });
+  if (!resp.ok) {
+    const text = await resp.text();
+    const err = new Error('Failed to fetch queue item') as Error & { status?: number; details?: string };
+    err.status = resp.status;
+    err.details = text;
+    throw err;
+  }
+  return resp.json();
+}
+
+async function fetchJenkinsBuildData(buildUrl: string): Promise<any> {
+  const origin = getJenkinsOrigin();
+  if (!origin) {
+    const err = new Error('JENKINS_JOB_URL not set') as Error & { status?: number };
+    err.status = 500;
+    throw err;
+  }
+  if (!buildUrl.startsWith(origin)) {
+    const err = new Error('Invalid build URL') as Error & { status?: number };
+    err.status = 400;
+    throw err;
+  }
+  const { authHeader } = getJenkinsAuth();
+  const target = buildUrl.endsWith('/api/json') ? buildUrl : `${buildUrl.replace(/\/api\/json$/, '')}/api/json`;
+  const resp = await fetch(target, {
+    headers: { Authorization: authHeader }
+  });
+  if (!resp.ok) {
+    const text = await resp.text();
+    const err = new Error('Failed to fetch build info') as Error & { status?: number; details?: string };
+    err.status = resp.status;
+    err.details = text;
+    throw err;
+  }
+
+  const data = await resp.json();
+  let parameters: Array<{ name: string; value: any }> = [];
+  if (Array.isArray(data?.actions)) {
+    for (const action of data.actions) {
+      if (Array.isArray(action?.parameters)) {
+        parameters = action.parameters;
+        break;
+      }
+    }
+  }
+  const paramMap = new Map<string, any>();
+  for (const p of parameters || []) {
+    if (p?.name) paramMap.set(String(p.name), p.value);
+  }
+
+  let runPrefix =
+    paramMap.get('RUN_PREFIX') ||
+    paramMap.get('ARTIFACT_PREFIX') ||
+    null;
+
+  const deviceType = paramMap.get('DEVICE_TYPE');
+  const preferredTarget =
+    normalizeReportTargetValue(paramMap.get('REPORT_TARGET')) ||
+    normalizeReportTargetValue(process.env.JENKINS_REPORT_TARGET || process.env.REPORT_TARGET);
+  const deviceTarget = normalizeReportTargetValue(deviceType);
+  const candidateTargets = Array.from(
+    new Set([preferredTarget, deviceTarget, 'mobile_web', 'desktop_web'].filter(Boolean) as string[])
+  );
+
+  const buildMeta = (() => {
+    try {
+      const urlObj = new URL(buildUrl);
+      const parts = urlObj.pathname.split('/').filter(Boolean);
+      const jobSegments: string[] = [];
+      for (let i = 0; i < parts.length; i += 1) {
+        if (parts[i] === 'job' && parts[i + 1]) {
+          jobSegments.push(parts[i + 1]);
+        }
+      }
+      const jobName = jobSegments.length ? jobSegments.join('/') : null;
+      const buildNumber = data?.number ?? (parts.length ? Number(parts[parts.length - 1]) : undefined);
+      const ts = data?.timestamp;
+      if (!jobName || !buildNumber || !ts) return null;
+      const d = new Date(ts);
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      const yy = String(d.getFullYear()).slice(-2);
+      return {
+        jobName,
+        buildNumber,
+        datePart: `${mm}-${dd}-${yy}`
+      };
+    } catch {
+      return null;
+    }
+  })();
+
+  const buildPrefixForTarget = (target: string) => {
+    if (!buildMeta) return null;
+    return `${buildMeta.datePart}/${target}/${buildMeta.jobName}/${buildMeta.buildNumber}/reports`;
+  };
+
+  const reportArtifactsExist = async (prefix: string): Promise<boolean> => {
+    const keys = [
+      `${prefix}/test.json`,
+      `${prefix}/test.json.gz`,
+      `${prefix}/test.json.zip`,
+      `${prefix}/result.html`
+    ];
+    for (const key of keys) {
+      if (await s3ObjectExists(key)) return true;
+    }
+    return false;
+  };
+
+  if (!runPrefix && buildMeta) {
+    const buildDone = data?.building === false || !!data?.result;
+    if (buildDone) {
+      for (const target of candidateTargets) {
+        const prefix = buildPrefixForTarget(target);
+        if (!prefix) continue;
+        if (await reportArtifactsExist(prefix)) {
+          runPrefix = prefix;
+          break;
+        }
+      }
+    }
+    if (!runPrefix) {
+      const fallbackTarget = preferredTarget || deviceTarget || 'mobile_web';
+      const fallbackPrefix = buildPrefixForTarget(fallbackTarget);
+      if (fallbackPrefix) runPrefix = fallbackPrefix;
+    }
+  }
+
+  return { ...data, parameters, runPrefix };
+}
+
+async function resolveWeeklyExecutionArtifacts(runPrefix: string): Promise<Partial<StoredWeeklyExecution>> {
+  const prefix = String(runPrefix || '').replace(/\/+$/, '');
+  if (!prefix) return {};
+
+  const jsonKey = `${prefix}/test.json`;
+  const htmlKey = `${prefix}/result.html`;
+  const patch: Partial<StoredWeeklyExecution> = {};
+
+  try {
+    const resultUrlResp = await fetch(`${INTERNAL_BASE_URL}/api/results/result-url?key=${encodeURIComponent(htmlKey)}`);
+    if (resultUrlResp.ok) {
+      const body = (await resultUrlResp.json()) as { url?: string };
+      if (body?.url) patch.resultsLink = body.url;
+    }
+  } catch {
+    // keep board responsive even if artifact lookup is transiently unavailable
   }
 
   try {
-    const targetUrl = new URL(defaultJobUrl);
-    const origin = `${targetUrl.protocol}//${targetUrl.host}`;
-    const authHeader = 'Basic ' + Buffer.from(`${user}:${token}`).toString('base64');
-
-    // Optional crumb fetch
-    let crumbHeader: Record<string, string> = {};
-    let crumbCookies = '';
-    try {
-      const crumbResp = await fetch(`${origin}/crumbIssuer/api/json`, {
-        headers: { Authorization: authHeader }
-      });
-      if (crumbResp.ok) {
-        const crumbJson = (await crumbResp.json()) as { crumbRequestField?: string; crumb?: string };
-        if (crumbJson.crumbRequestField && crumbJson.crumb) {
-          crumbHeader = { [crumbJson.crumbRequestField]: crumbJson.crumb };
-        }
-        const rawHeaders = (crumbResp.headers as any)?.raw?.();
-        const setCookie = rawHeaders ? rawHeaders['set-cookie'] : undefined;
-        if (Array.isArray(setCookie) && setCookie.length) {
-          crumbCookies = setCookie.map((c: string) => c.split(';')[0]).join('; ');
-        }
-      }
-    } catch (err) {
-      console.warn('Crumb fetch failed, proceeding without crumb:', err);
-    }
-
-    // Jenkins is happier when parameters are sent as form data (POST body).
-    // We append only token/cause to the URL to satisfy “Trigger build remotely”,
-    // and send the actual parameters in the body as x-www-form-urlencoded.
-    const queryParams = new URLSearchParams();
-    if (triggerToken) queryParams.append('token', triggerToken);
-    if (cause) queryParams.append('cause', cause);
-    const buildUrl = queryParams.toString() ? `${defaultJobUrl}?${queryParams.toString()}` : defaultJobUrl;
-
-    const bodyParams = new URLSearchParams();
-    Object.entries((params as Record<string, string>) || {}).forEach(([k, v]) => {
-      if (v !== undefined && v !== null) bodyParams.append(k, v);
-    });
-
-    const triggerResp = await fetch(buildUrl, {
+    const summaryResp = await fetch(`${INTERNAL_BASE_URL}/api/results/fetch-json`, {
       method: 'POST',
-      headers: {
-        Authorization: authHeader,
-        'Content-Type': 'application/x-www-form-urlencoded',
-        ...crumbHeader,
-        ...(crumbCookies ? { cookie: crumbCookies } : {})
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: jsonKey })
+    });
+    if (summaryResp.ok) {
+      const body = (await summaryResp.json()) as {
+        resultUrl?: string;
+        summary?: { passed?: number; failed?: number; total?: number };
+      };
+      if (body?.resultUrl && !patch.resultsLink) patch.resultsLink = body.resultUrl;
+      if (body?.summary) {
+        const passed = toFiniteNumber(body.summary.passed);
+        const failed = toFiniteNumber(body.summary.failed);
+        const total = toFiniteNumber(body.summary.total, passed + failed);
+        patch.passed = passed;
+        patch.failed = failed;
+        patch.totalAutomated = total > 0 ? total : undefined;
+        patch.passRate = computePassRate(passed, failed, 0);
+      }
+    }
+  } catch {
+    // ignore; result link is still useful without parsed summary
+  }
+
+  return patch;
+}
+
+async function syncWeeklyExecution(execution: StoredWeeklyExecution): Promise<StoredWeeklyExecution> {
+  let current = execution;
+
+  if (current.status === 'QUEUED' && current.queueId) {
+    try {
+      const queueInfo = await fetchJenkinsQueueItem(current.queueId);
+      if (queueInfo?.cancelled) {
+        return saveWeeklyExecutionPatch(current.id, {
+          status: 'FAILED',
+          errorMessage: queueInfo?.why ? String(queueInfo.why) : 'Queue item was cancelled.'
+        }) || current;
+      }
+      if (queueInfo?.executable?.url) {
+        current =
+          saveWeeklyExecutionPatch(current.id, {
+            buildUrl: String(queueInfo.executable.url),
+            buildNumber: toFiniteNumber(queueInfo.executable.number),
+            status: 'RUNNING'
+          }) || current;
+      }
+    } catch (err: any) {
+      return saveWeeklyExecutionPatch(current.id, {
+        errorMessage: String(err?.message || err)
+      }) || current;
+    }
+  }
+
+  if ((current.status === 'RUNNING' || current.status === 'QUEUED') && current.buildUrl) {
+    try {
+      const build = await fetchJenkinsBuildData(current.buildUrl);
+      const buildNumber = build?.number ? toFiniteNumber(build.number) : current.buildNumber;
+      const runPrefix = build?.runPrefix ? String(build.runPrefix) : current.runPrefix;
+
+      if (build?.building) {
+        return saveWeeklyExecutionPatch(current.id, {
+          buildNumber,
+          runPrefix,
+          status: 'RUNNING'
+        }) || current;
+      }
+
+      const result = String(build?.result || '').toUpperCase();
+      const status: WeeklyJobStatus = result === 'SUCCESS' ? 'SUCCESS' : result ? 'FAILED' : 'RUNNING';
+      const artifactPatch = runPrefix ? await resolveWeeklyExecutionArtifacts(runPrefix) : {};
+      return (
+        saveWeeklyExecutionPatch(current.id, {
+          buildNumber,
+          runPrefix,
+          status,
+          errorMessage: status === 'FAILED' && result ? result : current.errorMessage,
+          ...artifactPatch
+        }) || current
+      );
+    } catch (err: any) {
+      return saveWeeklyExecutionPatch(current.id, {
+        errorMessage: String(err?.message || err)
+      }) || current;
+    }
+  }
+
+  return current;
+}
+
+async function refreshWeeklyExecutionsForRange(weekStart: string, weekEnd: string): Promise<StoredWeeklyExecution[]> {
+  const executions = listWeeklyExecutions(weekStart, weekEnd);
+  for (const execution of executions) {
+    if (execution.status === 'QUEUED' || execution.status === 'RUNNING') {
+      await syncWeeklyExecution(execution);
+    }
+  }
+  return listWeeklyExecutions(weekStart, weekEnd);
+}
+
+function weeklyRowsToCsv(rows: WeeklyBoardRow[], executions: StoredWeeklyExecution[]): string {
+  const header = [
+    'Executed Week',
+    'Platform',
+    'Suite',
+    'Tag',
+    'Environment',
+    'Browser',
+    'Device Type',
+    'Test Cases',
+    'Application Coverage',
+    'Automation Scripts',
+    'Coverage %',
+    'Passed',
+    'Failed',
+    'Passing Rate',
+    'Results Link',
+    'Execution Type',
+    'Job Status',
+    'Executed At'
+  ];
+  const escapeCsv = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+  const executionByBoard = new Map<string, StoredWeeklyExecution>();
+  for (const execution of executions) {
+    if (!executionByBoard.has(execution.boardId)) executionByBoard.set(execution.boardId, execution);
+  }
+  const lines = rows.map(row => {
+    const execution = executionByBoard.get(row.id);
+    return [
+      row.executedWeek,
+      row.platform,
+      row.suite,
+      execution?.tag || '',
+      execution?.environment || '',
+      execution?.browser || '',
+      execution?.deviceType || '',
+      row.testCases,
+      row.applicationCoverage === null || row.applicationCoverage === undefined ? '' : `${row.applicationCoverage}%`,
+      row.automationScripts,
+      `${row.coveragePercent.toFixed(2)}%`,
+      row.passed,
+      row.failed,
+      row.passingRate ? `${row.passingRate.toFixed(2)}%` : '',
+      row.resultsLink || '',
+      row.execution,
+      row.jobStatus,
+      row.executedAt || ''
+    ]
+      .map(escapeCsv)
+      .join(',');
+  });
+  return [header.map(escapeCsv).join(','), ...lines].join('\n');
+}
+
+async function triggerWeeklyJobForRange(
+  job: WeeklyAutomationJobDefinition,
+  range: { weekStart: string; weekEnd: string }
+): Promise<StoredWeeklyExecution> {
+  const seed = buildWeeklyExecutionSeed({
+    boardId: job.boardId,
+    jobId: job.id,
+    label: job.label,
+    tag: job.tag,
+    environment: job.environment,
+    browser: job.browser,
+    deviceType: job.deviceType,
+    executionType: job.executionType,
+    status: 'QUEUED',
+    executedWeekStart: range.weekStart,
+    executedWeekEnd: range.weekEnd
+  });
+
+  const savedSeed = upsertWeeklyExecutionToDb(seed);
+  try {
+    const trigger = await triggerJenkinsBuildRequest({
+      params: {
+        FEATURE: job.tag,
+        ENVIRONMENT: job.environment,
+        BROWSER: job.browser,
+        DEVICE_TYPE: job.deviceType
       },
-      body: bodyParams.toString()
+      cause: `Weekly board ${range.weekStart} to ${range.weekEnd} :: ${job.label}`
     });
 
-    if (!triggerResp.ok) {
-      const text = await triggerResp.text();
-      const snippet = text ? text.slice(0, 4000) : '';
-      console.error('[Jenkins trigger] non-200', triggerResp.status, {
-        url: buildUrl,
-        params: bodyParams.toString(),
-        statusText: triggerResp.statusText,
-        bodySnippet: snippet
-      });
-      return res
-        .status(triggerResp.status)
-        .json({ message: 'Failed to trigger Jenkins', statusText: triggerResp.statusText, details: snippet });
-    }
-
-    const queueUrl = triggerResp.headers.get('location') || '';
-    const queueId = queueUrl ? Number(queueUrl.split('/').filter(Boolean).pop()) : undefined;
-
-    return res.json({ queued: true, message: 'Jenkins job triggered', queueUrl, queueId });
+    return (
+      saveWeeklyExecutionPatch(savedSeed.id, {
+        queueId: trigger.queueId,
+        queueUrl: trigger.queueUrl,
+        status: 'QUEUED'
+      }) || savedSeed
+    );
   } catch (err: any) {
+    return (
+      saveWeeklyExecutionPatch(savedSeed.id, {
+        status: 'FAILED',
+        errorMessage: String(err?.details || err?.message || err)
+      }) || savedSeed
+    );
+  }
+}
+
+// Jenkins trigger proxy (buildWithParameters)
+app.post('/api/jenkins/trigger', async (req, res) => {
+  const { jobUrl, params, cause } = req.body as { jobUrl?: string; params?: Record<string, string>; cause?: string };
+  try {
+    const result = await triggerJenkinsBuildRequest({ jobUrl, params, cause });
+    return res.json(result);
+  } catch (err: any) {
+    if (err?.status) {
+      return res.status(err.status).json({
+        message: err.message || 'Failed to trigger Jenkins',
+        statusText: err.statusText,
+        details: err.details
+      });
+    }
     console.error('Jenkins trigger error', err);
     return res.status(500).json({ message: 'Error triggering Jenkins', error: String(err?.message || err) });
   }
@@ -1812,20 +2563,12 @@ function getJenkinsOrigin() {
 // Get queue item info
 app.get('/api/jenkins/queue/:id', async (req, res) => {
   try {
-    const origin = getJenkinsOrigin();
-    if (!origin) return res.status(500).json({ message: 'JENKINS_JOB_URL not set' });
-    const { authHeader } = getJenkinsAuth();
-    const queueId = req.params.id;
-    const resp = await fetch(`${origin}/queue/item/${queueId}/api/json`, {
-      headers: { Authorization: authHeader }
-    });
-    if (!resp.ok) {
-      const text = await resp.text();
-      return res.status(resp.status).json({ message: 'Failed to fetch queue item', details: text });
-    }
-    const data = await resp.json();
+    const data = await fetchJenkinsQueueItem(req.params.id);
     return res.json(data);
   } catch (err: any) {
+    if (err?.status) {
+      return res.status(err.status).json({ message: err.message || 'Failed to fetch queue item', details: err.details });
+    }
     console.error('Jenkins queue fetch error', err);
     return res.status(500).json({ message: 'Error fetching Jenkins queue', error: String(err?.message || err) });
   }
@@ -1838,25 +2581,7 @@ app.post('/api/jenkins/queue/:id/cancel', async (req, res) => {
     if (!origin) return res.status(500).json({ message: 'JENKINS_JOB_URL not set' });
     const { authHeader } = getJenkinsAuth();
     const queueId = req.params.id;
-
-    let crumbHeader: Record<string, string> = {};
-    let crumbCookies = '';
-    try {
-      const crumbResp = await fetch(`${origin}/crumbIssuer/api/json`, { headers: { Authorization: authHeader } });
-      if (crumbResp.ok) {
-        const crumbJson = (await crumbResp.json()) as { crumbRequestField?: string; crumb?: string };
-        if (crumbJson.crumbRequestField && crumbJson.crumb) {
-          crumbHeader = { [crumbJson.crumbRequestField]: crumbJson.crumb };
-        }
-        const rawHeaders = (crumbResp.headers as any)?.raw?.();
-        const setCookie = rawHeaders ? rawHeaders['set-cookie'] : undefined;
-        if (Array.isArray(setCookie) && setCookie.length) {
-          crumbCookies = setCookie.map((c: string) => c.split(';')[0]).join('; ');
-        }
-      }
-    } catch (err) {
-      console.warn('Crumb fetch failed for cancel, proceeding without crumb:', err);
-    }
+    const { crumbHeader, crumbCookies } = await fetchJenkinsCrumb(origin, authHeader);
 
     const resp = await fetch(`${origin}/queue/item/${queueId}/cancel`, {
       method: 'POST',
@@ -1882,128 +2607,12 @@ app.get('/api/jenkins/build', async (req, res) => {
   try {
     const buildUrl = req.query.url as string | undefined;
     if (!buildUrl) return res.status(400).json({ message: 'url query param is required' });
-    const origin = getJenkinsOrigin();
-    if (!origin) return res.status(500).json({ message: 'JENKINS_JOB_URL not set' });
-    // Basic SSRF guard: require URL to start with Jenkins origin
-    if (!buildUrl.startsWith(origin)) {
-      return res.status(400).json({ message: 'Invalid build URL' });
-    }
-    const { authHeader } = getJenkinsAuth();
-    const target = buildUrl.endsWith('/api/json') ? buildUrl : `${buildUrl.replace(/\/api\/json$/, '')}/api/json`;
-    const resp = await fetch(target, {
-      headers: { Authorization: authHeader }
-    });
-    if (!resp.ok) {
-      const text = await resp.text();
-      return res.status(resp.status).json({ message: 'Failed to fetch build info', details: text });
-    }
-    const data = await resp.json();
-    let parameters: Array<{ name: string; value: any }> = [];
-    if (Array.isArray(data?.actions)) {
-      for (const action of data.actions) {
-        if (Array.isArray(action?.parameters)) {
-          parameters = action.parameters;
-          break;
-        }
-      }
-    }
-    const paramMap = new Map<string, any>();
-    for (const p of parameters || []) {
-      if (p?.name) paramMap.set(String(p.name), p.value);
-    }
-
-    let runPrefix =
-      paramMap.get('RUN_PREFIX') ||
-      paramMap.get('ARTIFACT_PREFIX') ||
-      null;
-
-    const normalizeReportTarget = (value: any): string | null => {
-      if (value === undefined || value === null) return null;
-      const raw = String(value).trim();
-      if (!raw) return null;
-      const lowered = raw.toLowerCase().replace(/\s+/g, '_');
-      if (/(mobile|mw)/.test(lowered)) return 'mobile_web';
-      if (/(desktop|dw)/.test(lowered)) return 'desktop_web';
-      return lowered;
-    };
-
-    const deviceType = paramMap.get('DEVICE_TYPE');
-    const preferredTarget =
-      normalizeReportTarget(paramMap.get('REPORT_TARGET')) ||
-      normalizeReportTarget(process.env.JENKINS_REPORT_TARGET || process.env.REPORT_TARGET);
-    const deviceTarget = normalizeReportTarget(deviceType);
-    const candidateTargets = Array.from(
-      new Set([preferredTarget, deviceTarget, 'mobile_web', 'desktop_web'].filter(Boolean) as string[])
-    );
-
-    const buildMeta = (() => {
-      try {
-        const urlObj = new URL(buildUrl);
-        const parts = urlObj.pathname.split('/').filter(Boolean);
-        const jobSegments: string[] = [];
-        for (let i = 0; i < parts.length; i += 1) {
-          if (parts[i] === 'job' && parts[i + 1]) {
-            jobSegments.push(parts[i + 1]);
-          }
-        }
-        const jobName = jobSegments.length ? jobSegments.join('/') : null;
-        const buildNumber = data?.number ?? (parts.length ? Number(parts[parts.length - 1]) : undefined);
-        const ts = data?.timestamp;
-        if (!jobName || !buildNumber || !ts) return null;
-        const d = new Date(ts);
-        const mm = String(d.getMonth() + 1).padStart(2, '0');
-        const dd = String(d.getDate()).padStart(2, '0');
-        const yy = String(d.getFullYear()).slice(-2);
-        return {
-          jobName,
-          buildNumber,
-          datePart: `${mm}-${dd}-${yy}`
-        };
-      } catch {
-        return null;
-      }
-    })();
-
-    const buildPrefixForTarget = (target: string) => {
-      if (!buildMeta) return null;
-      return `${buildMeta.datePart}/${target}/${buildMeta.jobName}/${buildMeta.buildNumber}/reports`;
-    };
-
-    const reportArtifactsExist = async (prefix: string): Promise<boolean> => {
-      const keys = [
-        `${prefix}/test.json`,
-        `${prefix}/test.json.gz`,
-        `${prefix}/test.json.zip`,
-        `${prefix}/result.html`
-      ];
-      for (const key of keys) {
-        if (await s3ObjectExists(key)) return true;
-      }
-      return false;
-    };
-
-    // Fallback: compute prefix from build info (date/reportTarget/job/number) to mirror pipeline folder structure
-    if (!runPrefix && buildMeta) {
-      const buildDone = data?.building === false || !!data?.result;
-      if (buildDone) {
-        for (const target of candidateTargets) {
-          const prefix = buildPrefixForTarget(target);
-          if (!prefix) continue;
-          if (await reportArtifactsExist(prefix)) {
-            runPrefix = prefix;
-            break;
-          }
-        }
-      }
-      if (!runPrefix) {
-        const fallbackTarget = preferredTarget || deviceTarget || 'mobile_web';
-        const fallbackPrefix = buildPrefixForTarget(fallbackTarget);
-        if (fallbackPrefix) runPrefix = fallbackPrefix;
-      }
-    }
-
-    return res.json({ ...data, parameters, runPrefix });
+    const data = await fetchJenkinsBuildData(buildUrl);
+    return res.json(data);
   } catch (err: any) {
+    if (err?.status) {
+      return res.status(err.status).json({ message: err.message || 'Failed to fetch build info', details: err.details });
+    }
     console.error('Jenkins build fetch error', err);
     return res.status(500).json({ message: 'Error fetching Jenkins build', error: String(err?.message || err) });
   }
@@ -2018,25 +2627,7 @@ app.post('/api/jenkins/build/stop', async (req, res) => {
     if (!origin) return res.status(500).json({ message: 'JENKINS_JOB_URL not set' });
     if (!buildUrl.startsWith(origin)) return res.status(400).json({ message: 'Invalid build URL' });
     const { authHeader } = getJenkinsAuth();
-
-    let crumbHeader: Record<string, string> = {};
-    let crumbCookies = '';
-    try {
-      const crumbResp = await fetch(`${origin}/crumbIssuer/api/json`, { headers: { Authorization: authHeader } });
-      if (crumbResp.ok) {
-        const crumbJson = (await crumbResp.json()) as { crumbRequestField?: string; crumb?: string };
-        if (crumbJson.crumbRequestField && crumbJson.crumb) {
-          crumbHeader = { [crumbJson.crumbRequestField]: crumbJson.crumb };
-        }
-        const rawHeaders = (crumbResp.headers as any)?.raw?.();
-        const setCookie = rawHeaders ? rawHeaders['set-cookie'] : undefined;
-        if (Array.isArray(setCookie) && setCookie.length) {
-          crumbCookies = setCookie.map((c: string) => c.split(';')[0]).join('; ');
-        }
-      }
-    } catch (err) {
-      console.warn('Crumb fetch failed for stop, proceeding without crumb:', err);
-    }
+    const { crumbHeader, crumbCookies } = await fetchJenkinsCrumb(origin, authHeader);
 
     const stopUrl = buildUrl.endsWith('/') ? `${buildUrl}stop` : `${buildUrl}/stop`;
     const resp = await fetch(stopUrl, {
@@ -2058,8 +2649,183 @@ app.post('/api/jenkins/build/stop', async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 3000;
+app.get('/api/automation/weekly-status', async (req, res) => {
+  try {
+    const range = resolveWorkingWeekRange(req.query.weekStart as string | undefined, req.query.weekEnd as string | undefined);
+    const executions = await refreshWeeklyExecutionsForRange(range.weekStart, range.weekEnd);
+    const payload = buildWeeklyStatusResponse(range.weekStart, range.weekEnd, executions, {
+      platform: req.query.platform as string | undefined,
+      suite: req.query.suite as string | undefined,
+      executionType: req.query.executionType as string | undefined
+    });
+
+    return res.json({
+      weekStart: range.weekStart,
+      weekEnd: range.weekEnd,
+      label: range.label,
+      summary: payload.summary,
+      rows: payload.rows
+    });
+  } catch (err: any) {
+    console.error('Weekly status fetch error', err);
+    return res.status(500).json({ message: 'Error loading weekly status board', error: String(err?.message || err) });
+  }
+});
+
+app.post('/api/automation/weekly-status/run', async (req, res) => {
+  try {
+    const body = req.body as { weekStart?: string; weekEnd?: string };
+    const range = resolveWorkingWeekRange(body.weekStart, body.weekEnd);
+    const triggered: StoredWeeklyExecution[] = [];
+
+    for (const job of WEEKLY_AUTOMATION_JOBS.filter(entry => entry.active)) {
+      triggered.push(await triggerWeeklyJobForRange(job, range));
+    }
+
+    return res.json({
+      weekStart: range.weekStart,
+      weekEnd: range.weekEnd,
+      triggered
+    });
+  } catch (err: any) {
+    console.error('Weekly status run error', err);
+    return res.status(500).json({ message: 'Error running weekly automation jobs', error: String(err?.message || err) });
+  }
+});
+
+app.post('/api/automation/weekly-status/run/:jobId', async (req, res) => {
+  try {
+    const body = req.body as { weekStart?: string; weekEnd?: string };
+    const range = resolveWorkingWeekRange(body.weekStart, body.weekEnd);
+    const job = findWeeklyJobDefinitionById(req.params.jobId);
+
+    if (!job || !job.active) {
+      return res.status(404).json({ message: 'Weekly automation job not found.' });
+    }
+
+    const triggered = await triggerWeeklyJobForRange(job, range);
+    return res.json({
+      weekStart: range.weekStart,
+      weekEnd: range.weekEnd,
+      triggered
+    });
+  } catch (err: any) {
+    console.error('Single weekly job run error', err);
+    return res.status(500).json({ message: 'Error running weekly automation job', error: String(err?.message || err) });
+  }
+});
+
+app.post('/api/automation/weekly-status/executions', (req, res) => {
+  try {
+    const body = req.body as Partial<StoredWeeklyExecution> & {
+      weekStart?: string;
+      weekEnd?: string;
+    };
+    const range = resolveWorkingWeekRange(body.executedWeekStart || body.weekStart, body.executedWeekEnd || body.weekEnd);
+    const executionType = (String(body.executionType || 'ON_DEMAND').toUpperCase() as WeeklyExecutionType);
+    const status = (String(body.status || 'QUEUED').toUpperCase() as WeeklyJobStatus);
+    const existing = body.id ? getWeeklyExecution(body.id) : undefined;
+
+    let saved: StoredWeeklyExecution;
+    if (existing) {
+      const patch: Partial<StoredWeeklyExecution> = {
+        executionType,
+        status,
+        executedWeekStart: range.weekStart,
+        executedWeekEnd: range.weekEnd,
+        executedAt: body.executedAt || existing.executedAt
+      };
+      if (body.boardId !== undefined) patch.boardId = body.boardId;
+      if (body.jobId !== undefined) patch.jobId = body.jobId;
+      if (body.label !== undefined) patch.label = body.label;
+      if (body.tag !== undefined) patch.tag = body.tag;
+      if (body.environment !== undefined) patch.environment = body.environment;
+      if (body.browser !== undefined) patch.browser = body.browser;
+      if (body.deviceType !== undefined) patch.deviceType = body.deviceType;
+      if (body.totalAutomated !== undefined) patch.totalAutomated = toFiniteNumber(body.totalAutomated);
+      if (body.passed !== undefined) patch.passed = toFiniteNumber(body.passed);
+      if (body.failed !== undefined) patch.failed = toFiniteNumber(body.failed);
+      if (body.passRate !== undefined) patch.passRate = toFiniteNumber(body.passRate);
+      if (body.resultsLink !== undefined) patch.resultsLink = body.resultsLink;
+      if (body.queueId !== undefined) patch.queueId = toFiniteNumber(body.queueId);
+      if (body.queueUrl !== undefined) patch.queueUrl = body.queueUrl;
+      if (body.buildUrl !== undefined) patch.buildUrl = body.buildUrl;
+      if (body.buildNumber !== undefined) patch.buildNumber = toFiniteNumber(body.buildNumber);
+      if (body.runPrefix !== undefined) patch.runPrefix = body.runPrefix;
+      if (body.errorMessage !== undefined) patch.errorMessage = body.errorMessage;
+      saved =
+        saveWeeklyExecutionPatch(existing.id, patch) || existing;
+    } else {
+      const seed = buildWeeklyExecutionSeed({
+        id: body.id,
+        boardId: body.boardId,
+        jobId: body.jobId,
+        label: body.label,
+        tag: body.tag,
+        environment: body.environment,
+        browser: body.browser,
+        deviceType: body.deviceType,
+        executionType,
+        status,
+        executedAt: body.executedAt,
+        executedWeekStart: range.weekStart,
+        executedWeekEnd: range.weekEnd
+      });
+      saved = upsertWeeklyExecutionToDb({
+        ...seed,
+        queueId: body.queueId,
+        queueUrl: body.queueUrl,
+        buildUrl: body.buildUrl,
+        buildNumber: body.buildNumber,
+        runPrefix: body.runPrefix,
+        resultsLink: body.resultsLink,
+        passed: toFiniteNumber(body.passed),
+        failed: toFiniteNumber(body.failed),
+        totalAutomated: toFiniteNumber(body.totalAutomated, seed.totalAutomated),
+        passRate: toFiniteNumber(body.passRate),
+        errorMessage: body.errorMessage
+      });
+    }
+
+    return res.status(existing ? 200 : 201).json(saved);
+  } catch (err: any) {
+    console.error('Weekly execution upsert error', err);
+    return res.status(400).json({ message: 'Unable to save weekly execution', error: String(err?.message || err) });
+  }
+});
+
+app.get('/api/automation/weekly-status/export', async (req, res) => {
+  try {
+    const range = resolveWorkingWeekRange(req.query.weekStart as string | undefined, req.query.weekEnd as string | undefined);
+    const executions = await refreshWeeklyExecutionsForRange(range.weekStart, range.weekEnd);
+    const platform = String(req.query.platform || '').toUpperCase();
+    const suite = String(req.query.suite || '').toUpperCase();
+    const executionType = String(req.query.executionType || '').toUpperCase();
+    const filteredExecutions = executions.filter(execution => {
+      if (platform && platform !== 'ALL' && execution.platform !== platform) return false;
+      if (suite && suite !== 'ALL' && execution.suite !== suite) return false;
+      if (executionType && executionType !== 'ALL' && execution.executionType !== executionType) return false;
+      return true;
+    });
+    const payload = buildWeeklyStatusResponse(range.weekStart, range.weekEnd, executions, {
+      platform: req.query.platform as string | undefined,
+      suite: req.query.suite as string | undefined,
+      executionType: req.query.executionType as string | undefined
+    });
+    const csv = weeklyRowsToCsv(payload.rows, filteredExecutions);
+    const filename = `automation-weekly-status-${range.weekStart}-to-${range.weekEnd}.csv`;
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    return res.send(csv);
+  } catch (err: any) {
+    console.error('Weekly status export error', err);
+    return res.status(500).json({ message: 'Error exporting weekly status board', error: String(err?.message || err) });
+  }
+});
+
+const PORT = APP_PORT;
 app.listen(PORT, () => {
   console.log(`NBCuniversal backend listening on port ${PORT}`);
-  scheduleEnvHealthAutoSync(Number(PORT));
+  scheduleEnvHealthAutoSync(PORT);
 });

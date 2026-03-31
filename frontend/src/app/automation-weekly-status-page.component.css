@@ -1,0 +1,137 @@
+.weekly-status-page {
+  background:
+    radial-gradient(circle at top left, rgba(17, 94, 89, 0.14), transparent 36%),
+    linear-gradient(180deg, #f5f7f6 0%, #ffffff 22%, #f4f7fb 100%);
+  min-height: 100vh;
+}
+
+.hero-card {
+  border: 0;
+  border-radius: 24px;
+  background: transparent;
+  color: inherit;
+  overflow: hidden;
+  box-shadow: none;
+}
+
+.hero-card__content {
+  display: grid;
+  gap: 1.5rem;
+  padding: 1.5rem;
+}
+
+.hero-card__eyebrow {
+  letter-spacing: 0.16em;
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  color: inherit;
+}
+
+.hero-card__title {
+  font-size: clamp(1.8rem, 3vw, 2.6rem);
+  font-weight: 700;
+}
+
+.hero-card__copy {
+  max-width: 40rem;
+  color: inherit;
+}
+
+.filter-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.summary-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.summary-card {
+  border-radius: 18px;
+  background: #ffffff;
+  padding: 1rem 1.1rem;
+  border: 1px solid rgba(13, 59, 102, 0.08);
+}
+
+.summary-card--scripts {
+  background: #f8f9fa;
+  border-color: rgba(108, 117, 125, 0.2);
+}
+
+.summary-card--passed {
+  background: rgba(25, 135, 84, 0.12);
+  border-color: rgba(25, 135, 84, 0.24);
+}
+
+.summary-card--failed {
+  background: rgba(220, 53, 69, 0.12);
+  border-color: rgba(220, 53, 69, 0.24);
+}
+
+.summary-card--rate {
+  background: rgba(13, 202, 240, 0.12);
+  border-color: rgba(13, 202, 240, 0.24);
+}
+
+.summary-card__label {
+  color: #526071;
+  font-size: 0.84rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.summary-card__value {
+  color: #0d3b66;
+  font-size: clamp(1.6rem, 2vw, 2.3rem);
+  font-weight: 700;
+}
+
+.summary-card--scripts .summary-card__label,
+.summary-card--scripts .summary-card__value {
+  color: #495057;
+}
+
+.summary-card--passed .summary-card__label,
+.summary-card--passed .summary-card__value {
+  color: #146c43;
+}
+
+.summary-card--failed .summary-card__label,
+.summary-card--failed .summary-card__value {
+  color: #b02a37;
+}
+
+.summary-card--rate .summary-card__label,
+.summary-card--rate .summary-card__value {
+  color: #055160;
+}
+
+.weekly-status-table th {
+  position: sticky;
+  top: 0;
+  background: #f8fafc;
+  white-space: nowrap;
+  z-index: 1;
+}
+
+.weekly-status-table td,
+.weekly-status-table th {
+  padding: 0.95rem 0.85rem;
+  vertical-align: middle;
+}
+
+@media (min-width: 992px) {
+  .hero-card__content {
+    grid-template-columns: minmax(0, 1.6fr) minmax(280px, 1fr);
+    padding: 2rem;
+  }
+}

@@ -4,6 +4,8 @@ import { FormsModule } from '@angular/forms';
 import { JenkinsService, JenkinsTriggerRequest } from './jenkins.service';
 import { TestResultsService } from './test-results.service';
 import { ReleaseService } from './release.service';
+import { WeeklyJobStatus } from './weekly-status.models';
+import { WeeklyStatusService } from './weekly-status.service';
 
 @Component({
   standalone: true,
@@ -117,13 +119,16 @@ export class ExecuteTestComponent {
     resultUrl?: string;
     fetchingArtifacts?: boolean;
     artifactError?: string;
+    createdAtIso?: string;
+    weeklyExecutionId?: string;
   }> = [];
   private pollHandle: any;
 
   constructor(
     private jenkins: JenkinsService,
     private testResults: TestResultsService,
-    private releases: ReleaseService
+    private releases: ReleaseService,
+    private weeklyStatus: WeeklyStatusService
   ) {}
 
   triggerJenkins(): void {
@@ -147,6 +152,7 @@ export class ExecuteTestComponent {
         const userJira = this.jiraTicket.trim();
         const userName = this.qaUser.trim() || 'Manual QA';
         const newRunId = res.queueId || Date.now();
+        const createdAtIso = now.toISOString();
         this.recentRuns.unshift({
           id: newRunId,
           status: res.queued ? 'queued' : 'triggered',
@@ -164,7 +170,9 @@ export class ExecuteTestComponent {
           note: queueText || res.message || '',
           testJsonUrl: undefined,
           resultUrl: undefined,
-          artifactError: undefined
+          artifactError: undefined,
+          createdAtIso,
+          weeklyExecutionId: undefined
         });
         // add to release board
         this.releases.add({
@@ -183,6 +191,7 @@ export class ExecuteTestComponent {
         // Keep feed reasonably small
         this.recentRuns = this.recentRuns.slice(0, 20);
         this.expandedRunId = newRunId;
+        this.syncRunToWeeklyBoard(this.recentRuns[0]);
         this.saveRuns();
         this.updateBannerStatus();
       },
@@ -222,6 +231,7 @@ export class ExecuteTestComponent {
               run.buildNumber = info.executable.number;
               run.status = 'running';
             }
+            this.syncRunToWeeklyBoard(run);
             this.saveRuns();
             this.updateBannerStatus();
           },
@@ -245,6 +255,7 @@ export class ExecuteTestComponent {
                 this.fetchArtifacts(run);
               }
             }
+            this.syncRunToWeeklyBoard(run);
             this.saveRuns();
             this.updateBannerStatus();
           },
@@ -282,6 +293,7 @@ export class ExecuteTestComponent {
       this.jenkins.cancelQueue(run.queueId).subscribe({
         next: () => {
           run.status = 'cancelled';
+          this.syncRunToWeeklyBoard(run, { status: 'FAILED', errorMessage: 'Run cancelled from dashboard.' });
           this.saveRuns();
           this.updateBannerStatus();
         },
@@ -293,6 +305,7 @@ export class ExecuteTestComponent {
       this.jenkins.stopBuild(run.buildUrl).subscribe({
         next: () => {
           run.status = 'cancelled';
+          this.syncRunToWeeklyBoard(run, { status: 'FAILED', errorMessage: 'Run stopped from dashboard.' });
           this.saveRuns();
           this.updateBannerStatus();
         },
@@ -366,6 +379,19 @@ export class ExecuteTestComponent {
             resultUrl: run.resultUrl
           }).subscribe({ next: () => {}, error: () => {} });
         }
+        if (resp?.summary) {
+          const passed = Number(resp.summary.passed || 0);
+          const failed = Number(resp.summary.failed || 0);
+          const total = Number(resp.summary.total || passed + failed);
+          this.syncRunToWeeklyBoard(run, {
+            totalAutomated: total,
+            passed,
+            failed,
+            passRate: this.computePassRate(passed, failed),
+            resultsLink: run.resultUrl,
+            status: this.mapWeeklyStatus(run.status)
+          });
+        }
         this.saveRuns();
       },
       error: () => {
@@ -379,6 +405,10 @@ export class ExecuteTestComponent {
       next: resp => {
         run.resultUrl = resp?.url;
         this.releases.update(run.id, { resultUrl: run.resultUrl, stage: 'delivered' });
+        this.syncRunToWeeklyBoard(run, {
+          resultsLink: run.resultUrl,
+          status: this.mapWeeklyStatus(run.status)
+        });
         // Save the run to backend even if test.json wasn’t fetched (data may be empty)
         this.testResults.saveResultRun({
           name: jsonKey,
@@ -449,6 +479,73 @@ export class ExecuteTestComponent {
   private isActiveStatus(status: string | undefined): boolean {
     const s = String(status || '').toLowerCase();
     return ['queued', 'pending', 'running', 'inprogress', 'in-progress', 'triggered'].includes(s);
+  }
+
+  private mapWeeklyStatus(status: string | undefined): WeeklyJobStatus {
+    const normalized = String(status || '').toLowerCase();
+    if (['queued', 'pending', 'triggered'].includes(normalized)) return 'QUEUED';
+    if (['running', 'inprogress', 'in-progress'].includes(normalized)) return 'RUNNING';
+    if (['completed', 'success'].includes(normalized)) return 'SUCCESS';
+    if (['cancelled', 'aborted', 'failure', 'failed'].includes(normalized)) return 'FAILED';
+    return 'NOT_RUN';
+  }
+
+  private computePassRate(passed: number, failed: number): number {
+    const total = Math.max(0, passed + failed);
+    return total > 0 ? Number(((passed / total) * 100).toFixed(2)) : 0;
+  }
+
+  private syncRunToWeeklyBoard(
+    run: any,
+    patch: {
+      totalAutomated?: number;
+      passed?: number;
+      failed?: number;
+      passRate?: number;
+      resultsLink?: string;
+      status?: WeeklyJobStatus;
+      errorMessage?: string;
+    } = {}
+  ): void {
+    if (!run?.feature) return;
+
+    if (!run.weeklyExecutionId) {
+      run.weeklyExecutionId = `ondemand-${run.id}`;
+    }
+
+    this.weeklyStatus
+      .upsertExecution({
+        id: run.weeklyExecutionId,
+        tag: run.feature,
+        environment: run.env,
+        browser: run.browser,
+        deviceType: run.deviceType,
+        executionType: 'ON_DEMAND',
+        status: patch.status || this.mapWeeklyStatus(run.status),
+        executedAt: run.createdAtIso || new Date().toISOString(),
+        queueId: run.queueId,
+        queueUrl: run.queueUrl,
+        buildUrl: run.buildUrl,
+        buildNumber: run.buildNumber,
+        runPrefix: run.prefix,
+        resultsLink: patch.resultsLink ?? run.resultUrl,
+        totalAutomated: patch.totalAutomated,
+        passed: patch.passed,
+        failed: patch.failed,
+        passRate: patch.passRate,
+        errorMessage: patch.errorMessage
+      })
+      .subscribe({
+        next: resp => {
+          if (resp?.id && resp.id !== run.weeklyExecutionId) {
+            run.weeklyExecutionId = resp.id;
+            this.saveRuns();
+          }
+        },
+        error: () => {
+          // The weekly board should not break the trigger flow.
+        }
+      });
   }
 
   private deriveKeyFromUrl(url: string | undefined): string | null {
