@@ -12,7 +12,7 @@
             </select>
           </div>
           <div class="col-md-6 col-lg-4">
-            <label class="form-label small text-uppercase text-muted">Feature</label>
+            <label class="form-label small text-uppercase text-muted">Feature Tag</label>
             <select class="form-select" [(ngModel)]="selectedFeature">
               <option *ngFor="let feat of jenkinsFeatures" [value]="feat">{{ feat }}</option>
             </select>
@@ -30,13 +30,13 @@
                 <input
                   class="form-check-input"
                   type="radio"
-                  name="deviceType"
-                  [id]="dt"
+                  name="suiteDeviceType"
+                  [id]="'suite-' + dt"
                   [value]="dt"
                   [checked]="selectedDeviceTypes.includes(dt)"
-                  (change)="toggleDeviceType(dt)"
+                  (change)="toggleDeviceType(dt, 'tag')"
                 >
-                <label class="form-check-label" [for]="dt">{{ dt }}</label>
+                <label class="form-check-label" [for]="'suite-' + dt">{{ dt }}</label>
               </div>
             </div>
           </div>
@@ -55,18 +55,138 @@
           <textarea class="form-control" rows="2" [(ngModel)]="comment" placeholder="Notes for this run"></textarea>
         </div>
 
-        <div class="d-flex align-items-center gap-2">
+        <div class="d-flex align-items-center gap-2 flex-wrap">
           <button class="btn btn-success" type="button" [disabled]="jenkinsBusy" (click)="triggerJenkins()">
             <i class="bi" [ngClass]="jenkinsBusy ? 'bi-hourglass-split' : 'bi-play-fill'"></i>
             {{ jenkinsBusy ? 'Triggering…' : 'Run job' }}
           </button>
-          <span *ngIf="jenkinsStatus" class="text-info">{{ jenkinsStatus }}</span>
+          <span *ngIf="suiteTriggerStatus" class="text-info">{{ suiteTriggerStatus }}</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card shadow-sm mb-4">
+      <div class="card-body">
+        <p class="text-uppercase text-success fw-semibold mb-1">Execute</p>
+        <h2 class="h4 mb-3">Execute Test Cases On Demand</h2>
+        <div class="row g-3 mb-3">
+          <div class="col-md-6 col-lg-3">
+            <label class="form-label small text-uppercase text-muted">Environment</label>
+            <select class="form-select" [(ngModel)]="onDemandSelectedEnv">
+              <option *ngFor="let env of jenkinsEnvironments" [value]="env">{{ env }}</option>
+            </select>
+          </div>
+          <div class="col-md-6 col-lg-3">
+            <label class="form-label small text-uppercase text-muted">Browser</label>
+            <select class="form-select" [(ngModel)]="onDemandSelectedBrowser">
+              <option *ngFor="let browser of jenkinsBrowsers" [value]="browser">{{ browser }}</option>
+            </select>
+          </div>
+          <div class="col-md-6 col-lg-3">
+            <label class="form-label small text-uppercase text-muted">Device Type</label>
+            <div class="d-flex flex-wrap gap-3">
+              <div class="form-check" *ngFor="let dt of deviceTypes">
+                <input
+                  class="form-check-input"
+                  type="radio"
+                  name="onDemandDeviceType"
+                  [id]="'ondemand-' + dt"
+                  [value]="dt"
+                  [checked]="onDemandSelectedDeviceTypes.includes(dt)"
+                  (change)="toggleDeviceType(dt, 'test-cases')"
+                >
+                <label class="form-check-label" [for]="'ondemand-' + dt">{{ dt }}</label>
+              </div>
+            </div>
+          </div>
+          <div class="col-md-6 col-lg-3">
+            <label class="form-label small text-uppercase text-muted">Automation Branch</label>
+            <input class="form-control" [(ngModel)]="onDemandBranch" [placeholder]="defaultAutomationBranch">
+            <div class="form-text">
+              This must be a branch from the Automation repo, not the dashboard repo.
+            </div>
+          </div>
+          <div class="col-md-6 col-lg-4">
+            <label class="form-label small text-uppercase text-muted">QA Operator</label>
+            <input class="form-control" [(ngModel)]="onDemandQaUser" placeholder="Who is triggering this run?">
+          </div>
+          <div class="col-md-6 col-lg-4">
+            <label class="form-label small text-uppercase text-muted">JIRA ticket (not sent to Jenkins)</label>
+            <input class="form-control" [(ngModel)]="onDemandJiraTicket" placeholder="e.g. QA-5678">
+          </div>
+        </div>
+
+        <div class="mb-3">
+          <div class="d-flex align-items-center justify-content-between gap-2 flex-wrap mb-2">
+            <label class="form-label small text-uppercase text-muted mb-0">Test Cases</label>
+            <button
+              class="btn btn-outline-secondary btn-sm"
+              type="button"
+              [disabled]="onDemandTestCases.length >= maxOnDemandFeatureFiles"
+              (click)="addOnDemandTestCaseRow()">
+              Add test case
+            </button>
+          </div>
+
+          <div class="border rounded p-3 mb-3" *ngFor="let testCase of onDemandTestCases; let i = index">
+            <div class="row g-3 align-items-end">
+              <div class="col-md-6 col-lg-3">
+                <label class="form-label small text-uppercase text-muted">App Folder</label>
+                <select class="form-select" [(ngModel)]="testCase.appFolder" [ngModelOptions]="{ standalone: true }">
+                  <option *ngFor="let appFolder of onDemandAppFolders" [value]="appFolder">{{ appFolder }}</option>
+                </select>
+              </div>
+              <div class="col-md-6 col-lg-3">
+                <label class="form-label small text-uppercase text-muted">Suite Folder</label>
+                <select class="form-select" [(ngModel)]="testCase.suiteFolder" [ngModelOptions]="{ standalone: true }">
+                  <option *ngFor="let suiteFolder of onDemandSuiteFolders" [value]="suiteFolder">{{ suiteFolder }}</option>
+                </select>
+              </div>
+              <div class="col-lg-4">
+                <label class="form-label small text-uppercase text-muted">Feature File Name</label>
+                <input
+                  class="form-control"
+                  [(ngModel)]="testCase.fileName"
+                  [ngModelOptions]="{ standalone: true }"
+                  placeholder="TC_WP_003_Most_Read_Section_on_homepage.feature">
+              </div>
+              <div class="col-lg-2 d-grid">
+                <button class="btn btn-outline-danger btn-sm" type="button" (click)="removeOnDemandTestCaseRow(i)">
+                  Remove
+                </button>
+              </div>
+            </div>
+            <div class="form-text mt-2">
+              Resolved path: <code>{{ onDemandPathPreview(testCase) }}</code>
+            </div>
+          </div>
+
+          <div class="form-text">
+            Each row builds an exact feature path. Duplicate rows are ignored. Maximum {{ maxOnDemandFeatureFiles }} files per run.
+            <span *ngIf="onDemandSelectionCount()">Currently selected: {{ onDemandSelectionCount() }}</span>
+          </div>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label small text-uppercase text-muted">Comment (not sent to Jenkins)</label>
+          <textarea class="form-control" rows="2" [(ngModel)]="onDemandComment" placeholder="Notes for this run"></textarea>
+        </div>
+
+        <div class="d-flex align-items-center gap-2 flex-wrap">
+          <button class="btn btn-success" type="button" [disabled]="onDemandBusy" (click)="triggerFeatureFilesOnDemand()">
+            <i class="bi" [ngClass]="onDemandBusy ? 'bi-hourglass-split' : 'bi-play-fill'"></i>
+            {{ onDemandBusy ? 'Triggering…' : 'Run selected test cases' }}
+          </button>
+          <span *ngIf="onDemandTriggerStatus" class="text-info">{{ onDemandTriggerStatus }}</span>
         </div>
       </div>
     </div>
 
     <div class="mb-3">
-      <h3 class="h5 mb-3">Recent/active runs</h3>
+      <div class="d-flex align-items-center justify-content-between gap-2 mb-3 flex-wrap">
+        <h3 class="h5 mb-0">Recent/active runs</h3>
+        <span *ngIf="jenkinsStatus" class="small text-muted">{{ jenkinsStatus }}</span>
+      </div>
       <div class="row g-3" *ngIf="recentRuns.length; else noRuns">
         <div class="col-md-6 col-xl-4" *ngFor="let run of recentRuns">
           <div class="card h-100 shadow-sm">
@@ -96,11 +216,22 @@
                 </div>
               </div>
 
+              <div class="small">
+                <strong>Selection:</strong> {{ run.displayLabel || run.feature }}
+              </div>
+
               <div class="d-flex flex-column gap-2" *ngIf="isRunExpanded(run)" [attr.id]="'run-details-' + run.id">
+                <div class="small"><strong>Execution:</strong> {{ runTypeLabel(run) }}</div>
                 <div class="small"><strong>Env:</strong> {{ run.env }}</div>
-                <div class="small"><strong>Feature:</strong> {{ run.feature }}</div>
+                <div class="small" *ngIf="run.branch"><strong>Branch:</strong> {{ run.branch }}</div>
                 <div class="small" *ngIf="run.browser"><strong>Browser:</strong> {{ run.browser }}</div>
                 <div class="small" *ngIf="run.deviceType"><strong>Device:</strong> {{ run.deviceType }}</div>
+                <div class="small" *ngIf="run.featureFiles?.length">
+                  <strong>Resolved Paths:</strong> {{ run.featureFiles?.length }}
+                </div>
+                <ul class="small mb-0 ps-3" *ngIf="run.featureFiles?.length">
+                  <li *ngFor="let featureFile of run.featureFiles">{{ featureFile }}</li>
+                </ul>
                 <div class="small" *ngIf="run.queueUrl">
                   <strong>Queue:</strong>
                   <a [href]="run.queueUrl" target="_blank" rel="noreferrer">{{ run.queueUrl }}</a>

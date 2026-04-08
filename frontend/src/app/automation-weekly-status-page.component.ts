@@ -1,6 +1,7 @@
 import { Component, OnDestroy, OnInit } from '@angular/core';
-import { CommonModule } from '@angular/common';
+import { CommonModule, Location } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { Router } from '@angular/router';
 import { finalize } from 'rxjs';
 import {
   WEEKLY_EXECUTION_OPTIONS,
@@ -50,7 +51,11 @@ export class AutomationWeeklyStatusPageComponent implements OnInit, OnDestroy {
   error = '';
   info = '';
 
-  constructor(private weeklyStatus: WeeklyStatusService) {
+  constructor(
+    private weeklyStatus: WeeklyStatusService,
+    private location: Location,
+    private router: Router
+  ) {
     const range = getWorkingWeekRangeFromInput();
     this.selectedWeekInput = range.weekStart;
   }
@@ -97,6 +102,15 @@ export class AutomationWeeklyStatusPageComponent implements OnInit, OnDestroy {
 
   refresh(): void {
     this.loadBoard();
+  }
+
+  goBack(): void {
+    if (typeof window !== 'undefined' && window.history.length > 1) {
+      this.location.back();
+      return;
+    }
+
+    this.router.navigateByUrl('/');
   }
 
   runWeeklyJobs(): void {

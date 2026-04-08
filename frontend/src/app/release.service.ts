@@ -1,11 +1,15 @@
 import { Injectable, signal } from '@angular/core';
 
 export type ReleaseStage = 'orders' | 'preparing' | 'assign' | 'inroute' | 'delivered';
+export type ReleaseRunType = 'tag' | 'test-cases';
 
 export interface ReleaseEntry {
   id: number;
   qa: string;
   feature: string;
+  runType?: ReleaseRunType;
+  featureFiles?: string[];
+  branch?: string;
   environment: string;
   comment?: string;
   jira?: string;
@@ -36,7 +40,15 @@ export class ReleaseService {
   private load(): ReleaseEntry[] {
     try {
       const raw = localStorage.getItem(this.storageKey);
-      if (raw) return JSON.parse(raw);
+      if (raw) {
+        const parsed = JSON.parse(raw) as ReleaseEntry[];
+        if (Array.isArray(parsed)) {
+          return parsed.map(entry => ({
+            ...entry,
+            featureFiles: Array.isArray(entry?.featureFiles) ? entry.featureFiles.filter(Boolean) : undefined
+          }));
+        }
+      }
     } catch {
       /* ignore */
     }

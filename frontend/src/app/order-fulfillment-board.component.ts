@@ -1,6 +1,7 @@
 import { Component, computed } from '@angular/core';
-import { CommonModule } from '@angular/common';
+import { CommonModule, Location } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { Router } from '@angular/router';
 import { RoleService } from './role.service';
 import { ReleaseService, ReleaseEntry } from './release.service';
 
@@ -13,11 +14,19 @@ import { ReleaseService, ReleaseEntry } from './release.service';
 export class OrderFulfillmentBoardComponent {
   readonly releases = computed<ReleaseEntry[]>(() => this.releaseService.releasesSignal());
 
-  constructor(public roles: RoleService, private releaseService: ReleaseService) {}
+  constructor(
+    public roles: RoleService,
+    private releaseService: ReleaseService,
+    private location: Location,
+    private router: Router
+  ) {}
 
   goBack(): void {
-    if (history.length > 1) {
-      history.back();
+    if (typeof window !== 'undefined' && window.history.length > 1) {
+      this.location.back();
+      return;
     }
+
+    this.router.navigateByUrl('/');
   }
 }

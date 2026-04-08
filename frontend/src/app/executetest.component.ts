@@ -1,11 +1,49 @@
 import { Component } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { JenkinsService, JenkinsTriggerRequest } from './jenkins.service';
+import {
+  JenkinsFeatureFilesTriggerRequest,
+  JenkinsOnDemandTestCaseRequest,
+  JenkinsService,
+  JenkinsTriggerRequest,
+  JenkinsTriggerResponse
+} from './jenkins.service';
 import { TestResultsService } from './test-results.service';
 import { ReleaseService } from './release.service';
 import { WeeklyJobStatus } from './weekly-status.models';
 import { WeeklyStatusService } from './weekly-status.service';
+
+type ExecuteRunType = 'tag' | 'test-cases';
+
+interface ExecuteRun {
+  id: number;
+  status: string;
+  who: string;
+  when: string;
+  date: string;
+  env: string;
+  feature: string;
+  displayLabel: string;
+  runType: ExecuteRunType;
+  featureFiles?: string[];
+  browser?: string;
+  deviceType?: string;
+  branch?: string;
+  comment?: string;
+  jira?: string;
+  queueUrl?: string;
+  buildUrl?: string;
+  buildNumber?: number;
+  queueId?: number;
+  note?: string;
+  prefix?: string;
+  testJsonUrl?: string;
+  resultUrl?: string;
+  fetchingArtifacts?: boolean;
+  artifactError?: string;
+  createdAtIso?: string;
+  weeklyExecutionId?: string;
+}
 
 @Component({
   standalone: true,
@@ -14,7 +52,7 @@ import { WeeklyStatusService } from './weekly-status.service';
   templateUrl: './executetest.component.html'
 })
 export class ExecuteTestComponent {
-  // Jenkins trigger UI state
+  readonly defaultAutomationBranch = 'Centralized_Web_And_Mobile_Final_Enterprise';
   jenkinsEnvironments = ['Production', 'Preprod', 'Stage'];
   jenkinsBrowsers = ['chrome', 'firefox', 'MicrosoftEdge'];
   deviceTypes = ['Desktop_Web', 'Mobile_Web'];
@@ -86,6 +124,11 @@ export class ExecuteTestComponent {
     '@mw_fast',
     '@dw_fast'
   ];
+
+  readonly maxOnDemandFeatureFiles = 20;
+  readonly onDemandAppFolders = ['nbc_WP', 'nbc_mobweb'];
+  readonly onDemandSuiteFolders = ['Regression', 'Sanity', 'Unified'];
+
   selectedEnv = 'Preprod';
   selectedBrowser = 'chrome';
   selectedDeviceTypes: string[] = ['Desktop_Web'];
@@ -93,35 +136,25 @@ export class ExecuteTestComponent {
   qaUser = '';
   comment = '';
   jiraTicket = '';
-  jenkinsStatus = '';
+  suiteTriggerStatus = '';
   jenkinsBusy = false;
+
+  onDemandSelectedEnv = 'Preprod';
+  onDemandSelectedBrowser = 'chrome';
+  onDemandSelectedDeviceTypes: string[] = ['Desktop_Web'];
+  onDemandBranch = this.defaultAutomationBranch;
+  onDemandTestCases: JenkinsOnDemandTestCaseRequest[] = [
+    { appFolder: 'nbc_WP', suiteFolder: 'Regression', fileName: '' }
+  ];
+  onDemandQaUser = '';
+  onDemandComment = '';
+  onDemandJiraTicket = '';
+  onDemandTriggerStatus = '';
+  onDemandBusy = false;
+
+  jenkinsStatus = '';
   expandedRunId: number | null = null;
-  // Simple run feed (client-side) using latest triggers
-  recentRuns: Array<{
-    id: number;
-    status: string; // queued, running, success, failure, aborted, etc.
-    who: string;
-    when: string;
-    date: string;
-    env: string;
-    feature: string;
-    browser?: string;
-    deviceType?: string;
-    comment?: string;
-    jira?: string;
-    queueUrl?: string;
-    buildUrl?: string;
-    buildNumber?: number;
-    queueId?: number;
-    note?: string;
-    prefix?: string;
-    testJsonUrl?: string;
-    resultUrl?: string;
-    fetchingArtifacts?: boolean;
-    artifactError?: string;
-    createdAtIso?: string;
-    weeklyExecutionId?: string;
-  }> = [];
+  recentRuns: ExecuteRun[] = [];
   private pollHandle: any;
 
   constructor(
@@ -132,73 +165,108 @@ export class ExecuteTestComponent {
   ) {}
 
   triggerJenkins(): void {
-    this.jenkinsStatus = '';
+    this.suiteTriggerStatus = '';
     this.jenkinsBusy = true;
-    const deviceType = this.currentDeviceType();
+
+    const deviceType = this.currentDeviceType(this.selectedDeviceTypes);
     const payload: JenkinsTriggerRequest = {
       environment: this.selectedEnv,
       featureTag: this.selectedFeature,
       browser: this.selectedBrowser,
       deviceType
     };
+
     this.jenkins.triggerBuild(payload).subscribe({
       next: res => {
         this.jenkinsBusy = false;
-        const queueText = res.queueId ? ` (queue #${res.queueId})` : '';
-        this.jenkinsStatus = res.message || `Triggered${queueText}`;
-        // Push a new run card entry
-        const now = new Date();
+        this.suiteTriggerStatus = this.buildTriggerStatus(res);
+
         const userComment = this.comment.trim();
         const userJira = this.jiraTicket.trim();
         const userName = this.qaUser.trim() || 'Manual QA';
-        const newRunId = res.queueId || Date.now();
-        const createdAtIso = now.toISOString();
-        this.recentRuns.unshift({
-          id: newRunId,
-          status: res.queued ? 'queued' : 'triggered',
+        const run = this.addTriggeredRun({
+          response: res,
+          runType: 'tag',
           who: userName,
-          when: now.toLocaleTimeString(),
-          date: now.toLocaleDateString(),
           env: this.selectedEnv,
           feature: this.selectedFeature,
           browser: this.selectedBrowser,
           deviceType,
-          comment: userComment || '',
-          jira: userJira || '',
-          queueUrl: res.queueUrl,
-          queueId: res.queueId,
-          note: queueText || res.message || '',
-          testJsonUrl: undefined,
-          resultUrl: undefined,
-          artifactError: undefined,
-          createdAtIso,
-          weeklyExecutionId: undefined
+          comment: userComment,
+          jira: userJira
         });
-        // add to release board
-        this.releases.add({
-          id: res.queueId || Date.now(),
-          qa: userName,
-          feature: this.selectedFeature,
-          environment: this.selectedEnv,
-          comment: userComment || '',
-          jira: userJira || '',
-          stage: 'orders',
-          createdAt: now.toISOString()
-        });
+
+        this.syncRunToWeeklyBoard(run);
         this.qaUser = '';
         this.comment = '';
         this.jiraTicket = '';
-        // Keep feed reasonably small
-        this.recentRuns = this.recentRuns.slice(0, 20);
-        this.expandedRunId = newRunId;
-        this.syncRunToWeeklyBoard(this.recentRuns[0]);
-        this.saveRuns();
-        this.updateBannerStatus();
       },
-      error: (err) => {
+      error: err => {
         this.jenkinsBusy = false;
         const detail = err?.error?.message || err?.message || 'Unknown error';
-        this.jenkinsStatus = `Failed to trigger Jenkins: ${detail}`;
+        this.suiteTriggerStatus = `Failed to trigger Jenkins: ${detail}`;
+      }
+    });
+  }
+
+  triggerFeatureFilesOnDemand(): void {
+    this.onDemandTriggerStatus = '';
+
+    const branch = this.onDemandBranch.trim();
+    if (!branch) {
+      this.onDemandTriggerStatus = 'Branch is required.';
+      return;
+    }
+
+    const prepared = this.prepareOnDemandSelections();
+    if (prepared.error || !prepared.testCases || !prepared.featurePaths) {
+      this.onDemandTriggerStatus = prepared.error || 'Provide at least one test case.';
+      return;
+    }
+
+    this.onDemandBusy = true;
+    const deviceType = this.currentDeviceType(this.onDemandSelectedDeviceTypes);
+    const payload: JenkinsFeatureFilesTriggerRequest = {
+      environment: this.onDemandSelectedEnv,
+      browser: this.onDemandSelectedBrowser,
+      branch,
+      testCases: prepared.testCases,
+      deviceType
+    };
+
+    this.jenkins.triggerFeatureFilesBuild(payload).subscribe({
+      next: res => {
+        this.onDemandBusy = false;
+        this.onDemandTriggerStatus = this.buildTriggerStatus(res);
+
+        const userComment = this.onDemandComment.trim();
+        const userJira = this.onDemandJiraTicket.trim();
+        const userName = this.onDemandQaUser.trim() || 'Manual QA';
+        const resolvedPaths = res.featureFiles?.length ? res.featureFiles : prepared.featurePaths;
+
+        this.addTriggeredRun({
+          response: res,
+          runType: 'test-cases',
+          who: userName,
+          env: this.onDemandSelectedEnv,
+          feature: this.buildFeatureFilesLabel(prepared.testCases.map(testCase => testCase.fileName)),
+          featureFiles: resolvedPaths,
+          branch: res.branch || branch,
+          browser: this.onDemandSelectedBrowser,
+          deviceType,
+          comment: userComment,
+          jira: userJira
+        });
+
+        this.onDemandQaUser = '';
+        this.onDemandComment = '';
+        this.onDemandJiraTicket = '';
+        this.resetOnDemandTestCases();
+      },
+      error: err => {
+        this.onDemandBusy = false;
+        const detail = err?.error?.message || err?.message || 'Unknown error';
+        this.onDemandTriggerStatus = `Failed to trigger test cases: ${detail}`;
       }
     });
   }
@@ -212,6 +280,54 @@ export class ExecuteTestComponent {
     if (this.pollHandle) {
       clearInterval(this.pollHandle);
     }
+  }
+
+  addOnDemandTestCaseRow(): void {
+    if (this.onDemandTestCases.length >= this.maxOnDemandFeatureFiles) return;
+    this.onDemandTestCases = [...this.onDemandTestCases, this.createEmptyOnDemandTestCase()];
+  }
+
+  removeOnDemandTestCaseRow(index: number): void {
+    if (this.onDemandTestCases.length === 1) {
+      this.resetOnDemandTestCases();
+      return;
+    }
+    this.onDemandTestCases = this.onDemandTestCases.filter((_row, rowIndex) => rowIndex !== index);
+  }
+
+  onDemandSelectionCount(): number {
+    return this.previewOnDemandFeaturePaths().length;
+  }
+
+  onDemandPathPreview(testCase: JenkinsOnDemandTestCaseRequest): string {
+    const fileName = String(testCase.fileName || '').trim() || '<feature-file>.feature';
+    return this.buildFeatureRelativePath({
+      appFolder: String(testCase.appFolder || '').trim() || this.onDemandAppFolders[0],
+      suiteFolder: String(testCase.suiteFolder || '').trim() || this.onDemandSuiteFolders[0],
+      fileName
+    });
+  }
+
+  toggleDeviceType(type: string, target: ExecuteRunType): void {
+    if (!type) return;
+    if (target === 'tag') {
+      this.selectedDeviceTypes = [type];
+      return;
+    }
+    this.onDemandSelectedDeviceTypes = [type];
+  }
+
+  runTypeLabel(run: ExecuteRun): string {
+    return run.runType === 'test-cases' ? 'Test cases on demand' : 'Tag-based suite';
+  }
+
+  toggleRunDetails(run: ExecuteRun): void {
+    if (!run) return;
+    this.expandedRunId = this.expandedRunId === run.id ? null : run.id;
+  }
+
+  isRunExpanded(run: ExecuteRun): boolean {
+    return !!run && this.expandedRunId === run.id;
   }
 
   private startPolling(): void {
@@ -242,15 +358,14 @@ export class ExecuteTestComponent {
       } else if (run.status === 'running' && run.buildUrl) {
         this.jenkins.getBuildInfo(run.buildUrl).subscribe({
           next: build => {
-            // capture prefix from build info parameters/env
             const prefix = this.extractPrefix(build);
             if (prefix) run.prefix = prefix;
 
             if (build.building) {
               run.status = 'running';
             } else if (build.result) {
-              const res = build.result.toLowerCase();
-              run.status = res === 'success' ? 'completed' : res;
+              const result = build.result.toLowerCase();
+              run.status = result === 'success' ? 'completed' : result;
               if (run.prefix && !run.testJsonUrl && !run.fetchingArtifacts) {
                 this.fetchArtifacts(run);
               }
@@ -264,7 +379,6 @@ export class ExecuteTestComponent {
           }
         });
       } else if (run.status === 'completed' && run.buildUrl && !run.prefix) {
-        // Try one more time to capture prefix after completion
         this.jenkins.getBuildInfo(run.buildUrl).subscribe({
           next: build => {
             const prefix = this.extractPrefix(build);
@@ -286,9 +400,9 @@ export class ExecuteTestComponent {
     this.updateBannerStatus();
   }
 
-  cancelRun(run: any): void {
+  cancelRun(run: ExecuteRun): void {
     if (run.status === 'completed' || run.status === 'failure' || run.status === 'failed') return;
-    // If queued, cancel queue item; if running, stop build
+
     if (run.status === 'queued' && run.queueId) {
       this.jenkins.cancelQueue(run.queueId).subscribe({
         next: () => {
@@ -316,6 +430,73 @@ export class ExecuteTestComponent {
     }
   }
 
+  private addTriggeredRun(input: {
+    response: JenkinsTriggerResponse;
+    runType: ExecuteRunType;
+    who: string;
+    env: string;
+    feature: string;
+    featureFiles?: string[];
+    branch?: string;
+    browser?: string;
+    deviceType?: string;
+    comment?: string;
+    jira?: string;
+  }): ExecuteRun {
+    const now = new Date();
+    const queueText = input.response.queueId ? ` (queue #${input.response.queueId})` : '';
+    const createdAtIso = now.toISOString();
+    const newRunId = input.response.queueId || Date.now();
+    const displayLabel = input.feature;
+    const featureFiles = input.featureFiles?.length ? input.featureFiles : undefined;
+
+    const run: ExecuteRun = {
+      id: newRunId,
+      status: input.response.queued ? 'queued' : 'triggered',
+      who: input.who,
+      when: now.toLocaleTimeString(),
+      date: now.toLocaleDateString(),
+      env: input.env,
+      feature: displayLabel,
+      displayLabel,
+      runType: input.runType,
+      featureFiles,
+      branch: input.branch,
+      browser: input.browser,
+      deviceType: input.deviceType,
+      comment: input.comment || '',
+      jira: input.jira || '',
+      queueUrl: input.response.queueUrl,
+      queueId: input.response.queueId,
+      note: queueText || input.response.message || '',
+      testJsonUrl: undefined,
+      resultUrl: undefined,
+      artifactError: undefined,
+      createdAtIso,
+      weeklyExecutionId: undefined
+    };
+
+    this.recentRuns.unshift(run);
+    this.recentRuns = this.recentRuns.slice(0, 20);
+    this.expandedRunId = newRunId;
+    this.releases.add({
+      id: newRunId,
+      qa: input.who,
+      feature: displayLabel,
+      featureFiles,
+      branch: input.branch,
+      runType: input.runType,
+      environment: input.env,
+      comment: input.comment || '',
+      jira: input.jira || '',
+      stage: 'orders',
+      createdAt: createdAtIso
+    });
+    this.saveRuns();
+    this.updateBannerStatus();
+    return run;
+  }
+
   private saveRuns(): void {
     try {
       localStorage.setItem('jenkins-runs', JSON.stringify(this.recentRuns));
@@ -328,13 +509,55 @@ export class ExecuteTestComponent {
     try {
       const raw = localStorage.getItem('jenkins-runs');
       if (raw) {
-        this.recentRuns = JSON.parse(raw);
+        const parsed = JSON.parse(raw);
+        this.recentRuns = Array.isArray(parsed) ? parsed.map(run => this.normalizeStoredRun(run)).slice(0, 20) : [];
       }
     } catch {
       this.recentRuns = [];
     }
     this.updateBannerStatus();
     this.ensureExpandedRun();
+  }
+
+  private normalizeStoredRun(raw: any): ExecuteRun {
+    const featureFiles = Array.isArray(raw?.featureFiles)
+      ? raw.featureFiles.map((value: unknown) => String(value ?? '').trim()).filter(Boolean)
+      : undefined;
+    const runType: ExecuteRunType = raw?.runType === 'test-cases' || (featureFiles?.length || 0) > 0 ? 'test-cases' : 'tag';
+    const displayLabel =
+      this.optionalString(raw?.displayLabel) ||
+      this.optionalString(raw?.feature) ||
+      (featureFiles?.length ? this.buildFeatureFilesLabel(featureFiles) : 'Unknown selection');
+
+    return {
+      id: this.optionalNumber(raw?.id) || Date.now(),
+      status: String(raw?.status || 'unknown'),
+      who: String(raw?.who || 'Manual QA'),
+      when: String(raw?.when || ''),
+      date: String(raw?.date || ''),
+      env: String(raw?.env || ''),
+      feature: displayLabel,
+      displayLabel,
+      runType,
+      featureFiles,
+      browser: this.optionalString(raw?.browser),
+      deviceType: this.optionalString(raw?.deviceType),
+      branch: this.optionalString(raw?.branch),
+      comment: this.optionalString(raw?.comment),
+      jira: this.optionalString(raw?.jira),
+      queueUrl: this.optionalString(raw?.queueUrl),
+      buildUrl: this.optionalString(raw?.buildUrl),
+      buildNumber: this.optionalNumber(raw?.buildNumber),
+      queueId: this.optionalNumber(raw?.queueId),
+      note: this.optionalString(raw?.note),
+      prefix: this.optionalString(raw?.prefix),
+      testJsonUrl: this.optionalString(raw?.testJsonUrl),
+      resultUrl: this.optionalString(raw?.resultUrl),
+      fetchingArtifacts: Boolean(raw?.fetchingArtifacts),
+      artifactError: this.optionalString(raw?.artifactError),
+      createdAtIso: this.optionalString(raw?.createdAtIso),
+      weeklyExecutionId: this.optionalString(raw?.weeklyExecutionId)
+    };
   }
 
   private extractPrefix(build: any): string | null {
@@ -346,18 +569,116 @@ export class ExecuteTestComponent {
     return null;
   }
 
-  toggleDeviceType(type: string): void {
-    if (!type) return;
-    // Only allow one selection; clicking a type selects it exclusively.
-    this.selectedDeviceTypes = [type];
-  }
-
-  private currentDeviceType(): string {
-    const first = this.selectedDeviceTypes.find(Boolean);
+  private currentDeviceType(selectedDeviceTypes: string[]): string {
+    const first = selectedDeviceTypes.find(Boolean);
     return first || 'Desktop_Web';
   }
 
-  private fetchArtifacts(run: any): void {
+  private prepareOnDemandSelections(): {
+    error?: string;
+    testCases?: JenkinsOnDemandTestCaseRequest[];
+    featurePaths?: string[];
+  } {
+    const normalizedRows = this.onDemandTestCases
+      .map(testCase => ({
+        appFolder: String(testCase.appFolder || '').trim(),
+        suiteFolder: String(testCase.suiteFolder || '').trim(),
+        fileName: String(testCase.fileName || '').trim()
+      }))
+      .filter(testCase => testCase.fileName);
+
+    if (!normalizedRows.length) {
+      return { error: 'Provide at least one feature file name.' };
+    }
+
+    const deduped: JenkinsOnDemandTestCaseRequest[] = [];
+    const seenPaths = new Set<string>();
+
+    for (let index = 0; index < normalizedRows.length; index += 1) {
+      const testCase = normalizedRows[index];
+      const rowNumber = index + 1;
+
+      if (!this.onDemandAppFolders.includes(testCase.appFolder)) {
+        return { error: `Select a valid app folder for row ${rowNumber}.` };
+      }
+      if (!this.onDemandSuiteFolders.includes(testCase.suiteFolder)) {
+        return { error: `Select a valid suite folder for row ${rowNumber}.` };
+      }
+      if (!testCase.fileName.toLowerCase().endsWith('.feature')) {
+        return { error: `Feature file in row ${rowNumber} must end with .feature.` };
+      }
+      if (/[\\/]/.test(testCase.fileName) || testCase.fileName.includes('..')) {
+        return { error: `Provide only the feature file name in row ${rowNumber}, not a path.` };
+      }
+
+      const relativePath = this.buildFeatureRelativePath(testCase);
+      if (seenPaths.has(relativePath)) continue;
+      seenPaths.add(relativePath);
+      deduped.push(testCase);
+    }
+
+    if (!deduped.length) {
+      return { error: 'Provide at least one unique test case.' };
+    }
+    if (deduped.length > this.maxOnDemandFeatureFiles) {
+      return { error: `You can trigger at most ${this.maxOnDemandFeatureFiles} feature files at a time.` };
+    }
+
+    return {
+      testCases: deduped,
+      featurePaths: deduped.map(testCase => this.buildFeatureRelativePath(testCase))
+    };
+  }
+
+  private previewOnDemandFeaturePaths(): string[] {
+    const seenPaths = new Set<string>();
+    const paths: string[] = [];
+
+    for (const testCase of this.onDemandTestCases) {
+      const fileName = String(testCase.fileName || '').trim();
+      if (!fileName) continue;
+      const path = this.buildFeatureRelativePath({
+        appFolder: String(testCase.appFolder || '').trim() || this.onDemandAppFolders[0],
+        suiteFolder: String(testCase.suiteFolder || '').trim() || this.onDemandSuiteFolders[0],
+        fileName
+      });
+      if (seenPaths.has(path)) continue;
+      seenPaths.add(path);
+      paths.push(path);
+    }
+
+    return paths;
+  }
+
+  private buildFeatureRelativePath(testCase: JenkinsOnDemandTestCaseRequest): string {
+    return `src/test/resources/features/${testCase.appFolder}/${testCase.suiteFolder}/${testCase.fileName}`;
+  }
+
+  private buildFeatureFilesLabel(values: string[]): string {
+    if (!values.length) return 'On-demand test cases';
+    const preview = values.slice(0, 3).join(', ');
+    const remaining = values.length - 3;
+    return remaining > 0 ? `${preview} +${remaining} more` : preview;
+  }
+
+  private createEmptyOnDemandTestCase(): JenkinsOnDemandTestCaseRequest {
+    return {
+      appFolder: this.onDemandAppFolders[0],
+      suiteFolder: this.onDemandSuiteFolders[0],
+      fileName: ''
+    };
+  }
+
+  private resetOnDemandTestCases(): void {
+    this.onDemandTestCases = [this.createEmptyOnDemandTestCase()];
+  }
+
+  private buildTriggerStatus(response: JenkinsTriggerResponse): string {
+    const queueText = response.queueId ? ` (queue #${response.queueId})` : '';
+    return response.message || `Triggered${queueText}`;
+  }
+
+  private fetchArtifacts(run: ExecuteRun): void {
     if (!run.prefix) return;
     run.fetchingArtifacts = true;
     const prefix = String(run.prefix).replace(/\/+$/, '');
@@ -369,7 +690,6 @@ export class ExecuteTestComponent {
         run.testJsonUrl = resp?.url;
         run.fetchingArtifacts = false;
         run.artifactError = undefined;
-        // Persist to release board and backend result runs
         this.releases.update(run.id, { testJsonUrl: run.testJsonUrl });
         if (resp?.data) {
           this.testResults.saveResultRun({
@@ -409,7 +729,6 @@ export class ExecuteTestComponent {
           resultsLink: run.resultUrl,
           status: this.mapWeeklyStatus(run.status)
         });
-        // Save the run to backend even if test.json wasn’t fetched (data may be empty)
         this.testResults.saveResultRun({
           name: jsonKey,
           key: jsonKey,
@@ -417,7 +736,6 @@ export class ExecuteTestComponent {
           resultUrl: run.resultUrl
         }).subscribe({ next: () => {}, error: () => {} });
 
-        // If we have a result URL, derive the key directly from it and pull test.json to ensure consistency
         const derivedKey = this.deriveKeyFromUrl(run.resultUrl);
         if (derivedKey) {
           const derivedJsonKey = derivedKey.replace(/result\.html$/, 'test.json');
@@ -452,16 +770,8 @@ export class ExecuteTestComponent {
     }
     const latest = this.recentRuns[0];
     const suffix = latest.buildNumber ? ` (#${latest.buildNumber})` : '';
-    this.jenkinsStatus = `Latest: ${latest.status}${suffix}`;
-  }
-
-  toggleRunDetails(run: any): void {
-    if (!run) return;
-    this.expandedRunId = this.expandedRunId === run.id ? null : run.id;
-  }
-
-  isRunExpanded(run: any): boolean {
-    return !!run && this.expandedRunId === run.id;
+    const runKind = latest.runType === 'test-cases' ? 'test cases' : 'suite';
+    this.jenkinsStatus = `Latest: ${latest.status}${suffix} · ${runKind}`;
   }
 
   private ensureExpandedRun(): void {
@@ -477,8 +787,8 @@ export class ExecuteTestComponent {
   }
 
   private isActiveStatus(status: string | undefined): boolean {
-    const s = String(status || '').toLowerCase();
-    return ['queued', 'pending', 'running', 'inprogress', 'in-progress', 'triggered'].includes(s);
+    const normalized = String(status || '').toLowerCase();
+    return ['queued', 'pending', 'running', 'inprogress', 'in-progress', 'triggered'].includes(normalized);
   }
 
   private mapWeeklyStatus(status: string | undefined): WeeklyJobStatus {
@@ -496,7 +806,7 @@ export class ExecuteTestComponent {
   }
 
   private syncRunToWeeklyBoard(
-    run: any,
+    run: ExecuteRun,
     patch: {
       totalAutomated?: number;
       passed?: number;
@@ -507,7 +817,7 @@ export class ExecuteTestComponent {
       errorMessage?: string;
     } = {}
   ): void {
-    if (!run?.feature) return;
+    if (run.runType !== 'tag' || !run.feature) return;
 
     if (!run.weeklyExecutionId) {
       run.weeklyExecutionId = `ondemand-${run.id}`;
@@ -551,11 +861,20 @@ export class ExecuteTestComponent {
   private deriveKeyFromUrl(url: string | undefined): string | null {
     if (!url) return null;
     try {
-      const u = new URL(url);
-      // strip leading slash and querystring
-      return decodeURIComponent(u.pathname.replace(/^\/+/, ''));
+      const targetUrl = new URL(url);
+      return decodeURIComponent(targetUrl.pathname.replace(/^\/+/, ''));
     } catch {
       return null;
     }
+  }
+
+  private optionalString(value: unknown): string | undefined {
+    const normalized = String(value ?? '').trim();
+    return normalized || undefined;
+  }
+
+  private optionalNumber(value: unknown): number | undefined {
+    const normalized = Number(value);
+    return Number.isFinite(normalized) ? normalized : undefined;
   }
 }

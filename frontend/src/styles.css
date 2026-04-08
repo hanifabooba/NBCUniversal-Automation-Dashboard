@@ -230,6 +230,33 @@ a:hover {
   font-size: 0.85rem;
 }
 
+.app-back-button-row {
+  display: flex;
+  justify-content: flex-end;
+  width: 100%;
+}
+
+.app-back-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0.45rem 1rem;
+  border-radius: 999px;
+  background-color: var(--nbcuniversal-green-light);
+  border: 1px solid rgba(31, 122, 58, 0.22);
+  color: var(--nbcuniversal-green-dark);
+  font-weight: 600;
+  box-shadow: 0 8px 18px rgba(31, 122, 58, 0.12);
+}
+
+.app-back-button:hover,
+.app-back-button:focus {
+  background-color: #c7efcf;
+  border-color: rgba(31, 122, 58, 0.34);
+  color: var(--nbcuniversal-green-dark);
+}
+
 .button-row .btn,
 .button-row .btn-primary {
   min-width: 120px;

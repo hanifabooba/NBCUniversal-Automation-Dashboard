@@ -1,15 +1,17 @@
 <section class="py-5" *ngIf="roles.canManageFulfillment(); else unauthorized">
   <div class="container">
-    <div class="d-flex align-items-center justify-content-between mb-3">
+    <div class="app-back-button-row mb-3">
+      <button type="button" class="btn btn-success btn-sm" (click)="goBack()">
+        <i class="bi bi-arrow-left me-1"></i>
+        Back
+      </button>
+    </div>
+    <div class="mb-3">
       <div>
         <p class="text-uppercase text-success fw-semibold mb-1">Release board</p>
         <h1 class="h4 mb-0">Releases update automatically from Execute Test</h1>
-        <small class="text-muted">Release Ticket · QA · Feature · Env · Results</small>
+        <small class="text-muted">Release Ticket · QA · Selection · Env · Results</small>
       </div>
-      <button type="button" class="btn btn-success btn-sm text-white" (click)="goBack()">
-        <i class="bi bi-arrow-left"></i>
-        Back
-      </button>
     </div>
 
     <div class="card shadow-sm">
@@ -19,7 +21,7 @@
             <tr>
               <th>Release Ticket</th>
               <th>QA</th>
-              <th>Feature</th>
+              <th>Selection</th>
               <th>Env.</th>
               <th style="width: 15%;">Results</th>
               <th>Jira</th>
@@ -56,6 +58,12 @@
 <ng-template #unauthorized>
   <section class="py-5">
     <div class="container">
+      <div class="app-back-button-row mb-3">
+        <button type="button" class="btn btn-success btn-sm" (click)="goBack()">
+          <i class="bi bi-arrow-left me-1"></i>
+          Back
+        </button>
+      </div>
       <div class="alert alert-warning mb-0">You do not have access to the release board.</div>
     </div>
   </section>

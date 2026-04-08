@@ -1,6 +1,6 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { Observable, of } from 'rxjs';
+import { Observable } from 'rxjs';
 
 export interface JenkinsTriggerRequest {
   environment: string;
@@ -10,11 +10,33 @@ export interface JenkinsTriggerRequest {
   cause?: string;
 }
 
+export interface JenkinsOnDemandTestCaseRequest {
+  appFolder: string;
+  suiteFolder: string;
+  fileName: string;
+}
+
+export interface JenkinsOnDemandTestCaseResponse extends JenkinsOnDemandTestCaseRequest {
+  relativePath?: string;
+}
+
+export interface JenkinsFeatureFilesTriggerRequest {
+  environment: string;
+  browser: string;
+  branch: string;
+  testCases: JenkinsOnDemandTestCaseRequest[];
+  deviceType?: string;
+  cause?: string;
+}
+
 export interface JenkinsTriggerResponse {
   queued?: boolean;
   queueId?: number;
   queueUrl?: string;
   message?: string;
+  branch?: string;
+  featureFiles?: string[];
+  testCases?: JenkinsOnDemandTestCaseResponse[];
 }
 
 export interface JenkinsQueueInfo {
@@ -42,6 +64,7 @@ export interface JenkinsBuildInfo {
 export class JenkinsService {
   // Backend proxy endpoint you own; it should accept { jobUrl, params } and handle auth/crumb.
   private readonly triggerUrl = '/api/jenkins/trigger';
+  private readonly triggerFeatureFilesUrl = '/api/jenkins/trigger-feature-files';
   // Jenkins job with parameters endpoint (pipeline with parameters).
   private readonly jobUrl = 'https://jenkins.otsops.com/job/POC_QA_DASHBOARD/buildWithParameters';
 
@@ -62,6 +85,10 @@ export class JenkinsService {
     };
 
     return this.http.post<JenkinsTriggerResponse>(this.triggerUrl, payload);
+  }
+
+  triggerFeatureFilesBuild(body: JenkinsFeatureFilesTriggerRequest): Observable<JenkinsTriggerResponse> {
+    return this.http.post<JenkinsTriggerResponse>(this.triggerFeatureFilesUrl, body);
   }
 
   getQueueInfo(queueId: number): Observable<JenkinsQueueInfo> {

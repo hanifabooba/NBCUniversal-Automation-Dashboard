@@ -18,6 +18,9 @@ interface RunCard {
   date: string;
   env: string;
   feature: string;
+  runType?: 'tag' | 'test-cases';
+  featureFiles?: string[];
+  branch?: string;
   comment?: string;
   jira?: string;
 }

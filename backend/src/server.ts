@@ -2523,6 +2523,164 @@ async function triggerWeeklyJobForRange(
   }
 }
 
+function createHttpError(message: string, status = 400): Error & { status?: number } {
+  const err = new Error(message) as Error & { status?: number };
+  err.status = status;
+  return err;
+}
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  const normalized = String(value ?? '').trim();
+  return normalized || undefined;
+}
+
+const ON_DEMAND_APP_FOLDERS = new Set(['nbc_WP', 'nbc_mobweb']);
+const ON_DEMAND_SUITE_FOLDERS = new Set(['Regression', 'Sanity', 'Unified']);
+
+type NormalizedOnDemandTestCase = {
+  appFolder: string;
+  suiteFolder: string;
+  fileName: string;
+  relativePath: string;
+};
+
+function normalizeFeatureFileEntries(value: unknown): string[] {
+  const rawItems = Array.isArray(value) ? value : typeof value === 'string' ? value.split(/\r?\n|,/) : [];
+  const normalized = rawItems
+    .map(item => String(item ?? '').trim())
+    .filter(Boolean);
+  return Array.from(new Set(normalized));
+}
+
+function buildFeatureRelativePath(testCase: { appFolder: string; suiteFolder: string; fileName: string }): string {
+  return `src/test/resources/features/${testCase.appFolder}/${testCase.suiteFolder}/${testCase.fileName}`;
+}
+
+function normalizeStructuredTestCases(value: unknown): Array<{ appFolder: string; suiteFolder: string; fileName: string }> {
+  if (!Array.isArray(value)) return [];
+  return value.map(entry => {
+    const record = entry as Record<string, unknown>;
+    return {
+      appFolder: String(record?.appFolder ?? '').trim(),
+      suiteFolder: String(record?.suiteFolder ?? '').trim(),
+      fileName: String(record?.fileName ?? '').trim()
+    };
+  });
+}
+
+function validateFeatureFileTriggerBody(body: {
+  environment?: unknown;
+  browser?: unknown;
+  deviceType?: unknown;
+  branch?: unknown;
+  testCases?: unknown;
+  featureFiles?: unknown;
+  jobUrl?: unknown;
+  cause?: unknown;
+}): {
+  environment: string;
+  browser: string;
+  branch: string;
+  featureFiles: string[];
+  legacyFeatureFiles: string[];
+  testCases?: NormalizedOnDemandTestCase[];
+  deviceType?: string;
+  jobUrl?: string;
+  cause?: string;
+} {
+  const environment = normalizeOptionalString(body.environment);
+  if (!environment) throw createHttpError('Environment is required.');
+
+  const browser = normalizeOptionalString(body.browser);
+  if (!browser) throw createHttpError('Browser is required.');
+
+  const branch = normalizeOptionalString(body.branch);
+  if (!branch) throw createHttpError('Branch is required.');
+  if (!/^[A-Za-z0-9._/-]+$/.test(branch)) {
+    throw createHttpError('Branch contains unsupported characters.');
+  }
+
+  const structuredTestCases = normalizeStructuredTestCases(body.testCases);
+  if (structuredTestCases.length) {
+    const dedupedTestCases: NormalizedOnDemandTestCase[] = [];
+    const seenPaths = new Set<string>();
+
+    for (let index = 0; index < structuredTestCases.length; index += 1) {
+      const testCase = structuredTestCases[index];
+      const rowNumber = index + 1;
+
+      if (!testCase.fileName) continue;
+      if (!ON_DEMAND_APP_FOLDERS.has(testCase.appFolder)) {
+        throw createHttpError(`Invalid app folder for row ${rowNumber}.`);
+      }
+      if (!ON_DEMAND_SUITE_FOLDERS.has(testCase.suiteFolder)) {
+        throw createHttpError(`Invalid suite folder for row ${rowNumber}.`);
+      }
+      if (!testCase.fileName.toLowerCase().endsWith('.feature')) {
+        throw createHttpError(`Feature file in row ${rowNumber} must end with .feature.`);
+      }
+      if (/[\\/]/.test(testCase.fileName) || testCase.fileName.includes('..')) {
+        throw createHttpError(`Provide only the feature file name in row ${rowNumber}, not a path.`);
+      }
+
+      const relativePath = buildFeatureRelativePath(testCase);
+      if (seenPaths.has(relativePath)) continue;
+      seenPaths.add(relativePath);
+      dedupedTestCases.push({
+        ...testCase,
+        relativePath
+      });
+    }
+
+    if (!dedupedTestCases.length) {
+      throw createHttpError('Provide at least one feature file.');
+    }
+    if (dedupedTestCases.length > 20) {
+      throw createHttpError('You can trigger at most 20 feature files at a time.');
+    }
+
+    return {
+      environment,
+      browser,
+      branch,
+      featureFiles: dedupedTestCases.map(testCase => testCase.relativePath),
+      legacyFeatureFiles: dedupedTestCases.map(testCase => testCase.fileName),
+      testCases: dedupedTestCases,
+      deviceType: normalizeOptionalString(body.deviceType),
+      jobUrl: normalizeOptionalString(body.jobUrl),
+      cause: normalizeOptionalString(body.cause)
+    };
+  }
+
+  const featureFiles = normalizeFeatureFileEntries(body.featureFiles);
+  if (!featureFiles.length) {
+    throw createHttpError('Provide at least one feature file.');
+  }
+  if (featureFiles.length > 20) {
+    throw createHttpError('You can trigger at most 20 feature files at a time.');
+  }
+
+  for (const featureFile of featureFiles) {
+    if (featureFile.length > 260) {
+      throw createHttpError(`Feature file is too long: ${featureFile}`);
+    }
+    if (/[\r\n]/.test(featureFile)) {
+      throw createHttpError(`Feature file contains an invalid line break: ${featureFile}`);
+    }
+  }
+
+  return {
+    environment,
+    browser,
+    branch,
+    featureFiles,
+    legacyFeatureFiles: featureFiles,
+    deviceType: normalizeOptionalString(body.deviceType),
+    jobUrl: normalizeOptionalString(body.jobUrl),
+    cause: normalizeOptionalString(body.cause)
+  };
+}
+
 // Jenkins trigger proxy (buildWithParameters)
 app.post('/api/jenkins/trigger', async (req, res) => {
   const { jobUrl, params, cause } = req.body as { jobUrl?: string; params?: Record<string, string>; cause?: string };
@@ -2539,6 +2697,58 @@ app.post('/api/jenkins/trigger', async (req, res) => {
     }
     console.error('Jenkins trigger error', err);
     return res.status(500).json({ message: 'Error triggering Jenkins', error: String(err?.message || err) });
+  }
+});
+
+app.post('/api/jenkins/trigger-feature-files', async (req, res) => {
+  try {
+    const payload = validateFeatureFileTriggerBody(req.body as {
+      environment?: unknown;
+      browser?: unknown;
+      deviceType?: unknown;
+      branch?: unknown;
+      testCases?: unknown;
+      featureFiles?: unknown;
+      jobUrl?: unknown;
+      cause?: unknown;
+    });
+
+    const result = await triggerJenkinsBuildRequest({
+      jobUrl: payload.jobUrl,
+      params: {
+        EXECUTION_MODE: payload.testCases?.length ? 'FEATURE_PATHS' : 'FEATURE_FILES',
+        FEATURE_FILES: payload.legacyFeatureFiles.join('\n'),
+        FEATURE_PATHS: payload.featureFiles.join('\n'),
+        BRANCH: payload.branch,
+        ENVIRONMENT: payload.environment,
+        BROWSER: payload.browser,
+        ...(payload.testCases?.length
+          ? {
+              TEST_CASES_JSON: JSON.stringify(payload.testCases),
+              FEATURE_ROOT: 'src/test/resources/features'
+            }
+          : {}),
+        ...(payload.deviceType ? { DEVICE_TYPE: payload.deviceType } : {})
+      },
+      cause:
+        payload.cause ||
+        `On-demand feature-file execution :: ${payload.branch} :: ${payload.featureFiles.length} test case(s)`
+    });
+
+    return res.json({
+      ...result,
+      branch: payload.branch,
+      featureFiles: payload.featureFiles,
+      testCases: payload.testCases
+    });
+  } catch (err: any) {
+    if (err?.status) {
+      return res.status(err.status).json({
+        message: err.message || 'Failed to trigger feature-file execution'
+      });
+    }
+    console.error('Jenkins feature-file trigger error', err);
+    return res.status(500).json({ message: 'Error triggering feature-file execution', error: String(err?.message || err) });
   }
 });
 
