@@ -224,4 +224,5 @@ export function stageToStatus(stage: string): string {
   if (stage === 'delivered') return 'completed';
   if (stage === 'assign' || stage === 'inroute') return 'out_for_delivery';
   return 'pending';
+  
 }

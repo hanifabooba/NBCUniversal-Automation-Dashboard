@@ -317,4 +317,5 @@ export function findWeeklyBoardDefinitionByTag(tag?: string | null, deviceType?:
   const platform = inferPlatform(normalizedTag, deviceType);
   const suite = inferSuite(normalizedTag);
   return WEEKLY_STATUS_BOARD_DEFINITIONS.find(def => def.platform === platform && def.suite === suite);
+  
 }

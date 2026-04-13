@@ -3164,4 +3164,5 @@ const PORT = APP_PORT;
 app.listen(PORT, () => {
   console.log(`NBCuniversal backend listening on port ${PORT}`);
   scheduleEnvHealthAutoSync(PORT);
+  
 });
