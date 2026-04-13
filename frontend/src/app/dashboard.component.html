@@ -1,31 +1,78 @@
-<section class="py-4">
-  <div class="d-flex flex-column flex-md-row align-items-start justify-content-between gap-2 mb-4">
+<section class="dashboard-page py-4 py-lg-5">
+  <div class="dashboard-hero shadow-sm mb-4">
     <div>
-      <p class="text-success text-uppercase small mb-1">Dashboard</p>
-      <h1 class="h4 mb-0">Welcome, {{ roles.currentUser()?.name || 'team member' }}</h1>
-      <div class="text-muted small">Role: {{ roles.currentRole() }}</div>
+      <p class="dashboard-hero__eyebrow mb-2">Automation command center</p>
+      <h1 class="dashboard-hero__title mb-2">Welcome, {{ roles.currentUser()?.name || 'team member' }}</h1>
+      <p class="dashboard-hero__copy mb-3">
+        Launch into weekly status, KPI reporting, execution boards, and native mobile planning from one consistent control surface.
+      </p>
+
+      <div class="dashboard-hero__pills">
+        <span class="dashboard-pill">
+          <i class="bi bi-person-badge me-1"></i>
+          Role: {{ roles.currentRole() }}
+        </span>
+        <span class="dashboard-pill">
+          <i class="bi bi-grid-1x2 me-1"></i>
+          {{ cards().length }} board{{ cards().length === 1 ? '' : 's' }} available
+        </span>
+        <span class="dashboard-pill">
+          <i class="bi bi-phone-vibrate me-1"></i>
+          Mobile-native planning now included
+        </span>
+      </div>
+    </div>
+
+    <div class="dashboard-hero__stats">
+      <article class="dashboard-stat-card" *ngFor="let stat of quickStats">
+        <div class="dashboard-stat-card__label">{{ stat.label }}</div>
+        <div class="dashboard-stat-card__value">{{ stat.value }}</div>
+        <div class="dashboard-stat-card__detail">{{ stat.detail }}</div>
+      </article>
     </div>
   </div>
 
-  <div *ngIf="cards().length; else emptyState" class="row g-3">
-    <div class="col-12 col-md-6 col-lg-4" *ngFor="let card of cards()">
-      <a class="text-decoration-none h-100 d-block" [routerLink]="card.link">
-        <div class="card h-100 shadow-sm hover-lift">
-          <div class="card-body d-flex align-items-start gap-3">
-            <div class="icon-circle">
-              <i class="bi" [ngClass]="card.icon"></i>
-            </div>
-            <div>
-              <div class="fw-semibold">{{ card.title }}</div>
-              <div class="text-muted small">{{ card.description }}</div>
-            </div>
-          </div>
+  <div *ngIf="cards().length; else emptyState" class="dashboard-grid">
+    <article class="dashboard-feature-card shadow-sm" *ngIf="primaryCard">
+      <div class="dashboard-feature-card__body">
+        <div class="dashboard-card-kicker">Primary board</div>
+        <div class="dashboard-feature-card__title">{{ primaryCard.title }}</div>
+        <p class="dashboard-feature-card__copy mb-0">{{ primaryCard.description }}</p>
+
+        <div class="dashboard-card-meta">
+          <span class="dashboard-card-meta__chip">
+            <i class="bi" [ngClass]="primaryCard.icon"></i>
+            Operational visibility
+          </span>
+          <span class="dashboard-card-meta__chip">
+            <i class="bi bi-lightning-charge-fill"></i>
+            Direct access
+          </span>
+        </div>
+
+        <a class="dashboard-card-cta" [routerLink]="primaryCard.link">
+          Open {{ primaryCard.title }}
+          <i class="bi bi-arrow-up-right"></i>
+        </a>
+      </div>
+    </article>
+
+    <div class="dashboard-tiles">
+      <a class="dashboard-tile shadow-sm" *ngFor="let card of secondaryCards" [routerLink]="card.link">
+        <div class="dashboard-tile__icon">
+          <i class="bi" [ngClass]="card.icon"></i>
+        </div>
+        <div class="dashboard-tile__title">{{ card.title }}</div>
+        <p class="dashboard-tile__copy mb-0">{{ card.description }}</p>
+        <div class="dashboard-tile__arrow">
+          Open board
+          <i class="bi bi-arrow-right-short"></i>
         </div>
       </a>
     </div>
   </div>
 
   <ng-template #emptyState>
-    <div class="alert alert-info mb-0">No additional tools are available for your role yet.</div>
+    <div class="alert alert-info mb-0 dashboard-empty">No additional tools are available for your role yet.</div>
   </ng-template>
 </section>

@@ -1,90 +1,178 @@
-<section class="py-4 order-hero">
+<section class="test-history-page py-4 py-lg-5">
   <div class="container">
-    <div class="d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-2 mb-3">
+    <div class="history-hero shadow-sm mb-4">
       <div>
-        <p class="text-uppercase text-success fw-semibold mb-1">Test history</p>
-        <h1 class="h4 fw-bold mb-0">Review recent automation selections</h1>
-        <small class="text-muted">Track tag runs and on-demand feature-file executions.</small>
+        <p class="history-hero__eyebrow mb-2">Automation history</p>
+        <h1 class="history-hero__title mb-2">Review recent automation selections</h1>
+        <p class="history-hero__copy mb-3">
+          Track tag-based runs and on-demand feature-file executions across environments from one history board.
+        </p>
+
+        <div class="history-hero__pills">
+          <span class="history-pill">
+            <i class="bi bi-layers me-1"></i>
+            {{ currentCategoryName }}
+          </span>
+          <span class="history-pill">
+            <i class="bi bi-clock-history me-1"></i>
+            {{ totalTrackedRuns }} tracked run{{ totalTrackedRuns === 1 ? '' : 's' }}
+          </span>
+          <span class="history-pill">
+            <i class="bi bi-terminal-dash me-1"></i>
+            History refreshes from local execution storage
+          </span>
+        </div>
       </div>
-      <div class="d-flex align-items-center gap-2">
-        <a class="btn btn-success btn-sm" routerLink="/executetest">
+
+      <div class="history-hero__aside">
+        <div class="history-hero__stats">
+          <article class="history-stat-card">
+            <div class="history-stat-card__label">Completed</div>
+            <div class="history-stat-card__value">{{ completedRuns }}</div>
+            <div class="history-stat-card__detail">Runs that closed successfully.</div>
+          </article>
+          <article class="history-stat-card">
+            <div class="history-stat-card__label">Active / queued</div>
+            <div class="history-stat-card__value">{{ activeRuns }}</div>
+            <div class="history-stat-card__detail">Signals still moving through execution.</div>
+          </article>
+          <article class="history-stat-card">
+            <div class="history-stat-card__label">Failures</div>
+            <div class="history-stat-card__value">{{ failedRuns }}</div>
+            <div class="history-stat-card__detail">Runs that need follow-up or rerun action.</div>
+          </article>
+        </div>
+
+        <a class="btn btn-success history-hero__cta" routerLink="/executetest">
           Go to Execute Test
           <i class="bi bi-arrow-right-short"></i>
         </a>
       </div>
     </div>
 
-    <div class="d-md-none mb-3 order-category-bar">
+    <div class="history-summary-grid mb-4">
+      <article class="history-summary-card history-summary-card--lane shadow-sm">
+        <div class="history-summary-card__label">Current lane</div>
+        <div class="history-summary-card__value">{{ selectedRuns.length }}</div>
+        <div class="history-summary-card__detail">{{ currentCategoryName }} runs in the active history lane.</div>
+      </article>
+      <article class="history-summary-card history-summary-card--complete shadow-sm">
+        <div class="history-summary-card__label">Completed runs</div>
+        <div class="history-summary-card__value">{{ completedRuns }}</div>
+        <div class="history-summary-card__detail">Successfully closed automation runs across the tracked history.</div>
+      </article>
+      <article class="history-summary-card history-summary-card--attention shadow-sm">
+        <div class="history-summary-card__label">Attention needed</div>
+        <div class="history-summary-card__value">{{ activeRuns + failedRuns }}</div>
+        <div class="history-summary-card__detail">Runs still active or already failed and needing follow-up.</div>
+      </article>
+    </div>
+
+    <div class="history-category-bar d-md-none mb-3">
       <button
         type="button"
-        class="btn order-category-pill"
+        class="btn history-category-pill"
         *ngFor="let cat of categories"
         [class.active]="cat.id === selectedCategory()"
         (click)="selectCategory(cat.id)"
       >
-        {{ cat.name }}
+        {{ cat.name }} · {{ categoryRunCount(cat.id) }}
       </button>
     </div>
 
-    <div class="d-flex flex-column flex-md-row gap-3">
-      <aside class="order-categories d-none d-md-block">
-        <div class="card h-100">
-          <div class="card-body">
-            <h2 class="h6 text-uppercase text-muted mb-3">Environments</h2>
-            <div class="list-group list-group-flush">
+    <div class="history-layout">
+      <aside class="history-sidebar d-none d-md-block">
+        <div class="card h-100 shadow-sm">
+          <div class="card-body history-sidebar__body">
+            <div class="history-sidebar__header">
+              <p class="history-sidebar__eyebrow mb-1">Environment lanes</p>
+              <h2 class="history-sidebar__title mb-0">Select a board</h2>
+            </div>
+
+            <div class="history-sidebar__list">
               <button
                 type="button"
-                class="list-group-item list-group-item-action"
+                class="history-sidebar__item"
                 *ngFor="let cat of categories"
-                [class.active]="cat.id === selectedCategory()"
+                [class.history-sidebar__item--active]="cat.id === selectedCategory()"
                 (click)="selectCategory(cat.id)"
               >
-                <div class="fw-semibold">{{ cat.name }}</div>
-                <small class="text-muted">{{ cat.description }}</small>
+                <div>
+                  <div class="history-sidebar__item-title">{{ cat.name }}</div>
+                  <small class="history-sidebar__item-copy">{{ cat.description }}</small>
+                </div>
+                <span class="history-sidebar__count">{{ categoryRunCount(cat.id) }}</span>
               </button>
             </div>
           </div>
         </div>
       </aside>
 
-      <div class="flex-fill">
-        <div class="card mb-3 shadow-sm">
+      <div class="history-main">
+        <div class="card shadow-sm history-board">
           <div class="card-body">
-            <h2 class="h6 text-uppercase text-muted mb-3">Recent runs</h2>
-            <div class="row g-3">
-              <div class="col-12">
-                <div class="card h-100">
-                  <div class="card-body">
-                    <div class="d-flex align-items-center justify-content-between mb-2">
-                      <div class="fw-semibold">{{ currentCategoryName }}</div>
-                      <span class="badge bg-light text-muted">{{ (runsByEnv[selectedCategory()] || []).length }} runs</span>
-                    </div>
-                    <div *ngIf="runsByEnv[selectedCategory()]?.length; else noRuns" class="d-flex flex-column gap-2">
-                      <div class="border rounded p-2" *ngFor="let run of runsByEnv[selectedCategory()]">
-                        <div class="d-flex justify-content-between align-items-center">
-                          <span class="fw-semibold">Run #{{ run.id }}</span>
-                          <span class="badge" [ngClass]="{
-                            'text-bg-warning': run.status === 'pending' || run.status === 'queued',
-                            'text-bg-info': run.status === 'inprogress' || run.status === 'running',
-                            'text-bg-success': run.status === 'completed',
-                            'text-bg-danger': run.status === 'failure' || run.status === 'failed',
-                            'text-bg-secondary': run.status !== 'pending' && run.status !== 'queued' && run.status !== 'inprogress' && run.status !== 'running' && run.status !== 'completed' && run.status !== 'failure' && run.status !== 'failed'
-                          }">{{ run.status }}</span>
-                        </div>
-                        <div class="small text-muted">{{ run.date }} {{ run.when }} · {{ run.who }}</div>
-                        <div class="small"><strong>Selection:</strong> {{ run.feature }}</div>
-                        <div class="small" *ngIf="run.branch"><strong>Branch:</strong> {{ run.branch }}</div>
-                        <div class="small"><strong>JIRA:</strong> {{ run.jira || '—' }}</div>
-                        <div class="small text-muted"><strong>Comment:</strong> {{ run.comment || '—' }}</div>
-                      </div>
-                    </div>
-                    <ng-template #noRuns>
-                      <div class="text-muted small">No runs yet.</div>
-                    </ng-template>
+            <div class="history-board__header">
+              <div>
+                <p class="history-board__eyebrow mb-1">Recent runs</p>
+                <h2 class="history-board__title mb-1">{{ currentCategoryName }}</h2>
+                <div class="history-board__copy">{{ selectedCategoryDescription }}</div>
+              </div>
+              <span class="badge rounded-pill text-bg-light history-board__count">{{ selectedRuns.length }} runs</span>
+            </div>
+
+            <div *ngIf="selectedRuns.length; else noRuns" class="history-runs-grid">
+              <article class="history-run-card" *ngFor="let run of selectedRuns">
+                <div class="history-run-card__topline">
+                  <div>
+                    <div class="history-run-card__title">Run #{{ run.id }}</div>
+                    <div class="history-run-card__meta">{{ run.date }} {{ run.when }} · {{ run.who }}</div>
+                  </div>
+                  <span class="badge" [ngClass]="badgeClass(run.status)">{{ run.status }}</span>
+                </div>
+
+                <div class="history-run-card__pills">
+                  <span class="history-run-chip">
+                    <i class="bi bi-diagram-3 me-1"></i>
+                    {{ runTypeLabel(run) }}
+                  </span>
+                  <span class="history-run-chip">
+                    <i class="bi bi-globe2 me-1"></i>
+                    {{ run.env }}
+                  </span>
+                </div>
+
+                <div class="history-run-card__details">
+                  <div class="history-detail-row">
+                    <span>Selection</span>
+                    <strong>{{ run.feature }}</strong>
+                  </div>
+                  <div class="history-detail-row" *ngIf="run.branch">
+                    <span>Branch</span>
+                    <strong>{{ run.branch }}</strong>
+                  </div>
+                  <div class="history-detail-row">
+                    <span>JIRA</span>
+                    <strong>{{ run.jira || '—' }}</strong>
+                  </div>
+                  <div class="history-detail-row">
+                    <span>Comment</span>
+                    <strong>{{ run.comment || '—' }}</strong>
                   </div>
                 </div>
-              </div>
+              </article>
             </div>
+
+            <ng-template #noRuns>
+              <div class="history-empty-state">
+                <div class="history-empty-state__icon">
+                  <i class="bi bi-clock-history"></i>
+                </div>
+                <div class="history-empty-state__title">No runs yet for {{ currentCategoryName }}</div>
+                <div class="history-empty-state__copy">
+                  Execute a suite or on-demand feature-file run to start building out this history lane.
+                </div>
+              </div>
+            </ng-template>
           </div>
         </div>
       </div>

@@ -29,7 +29,8 @@ interface RunCard {
   standalone: true,
   selector: 'app-test-history',
   imports: [CommonModule, RouterLink],
-  templateUrl: './test-history.component.html'
+  templateUrl: './test-history.component.html',
+  styleUrls: ['./test-history.component.css']
 })
 export class TestHistoryComponent implements OnInit, OnDestroy {
   categories: OrderCategory[] = [
@@ -133,9 +134,54 @@ export class TestHistoryComponent implements OnInit, OnDestroy {
     if (this.messageTimer) clearTimeout(this.messageTimer);
   }
 
+  get allRuns(): RunCard[] {
+    return this.categories.flatMap(category => this.runsByEnv[category.id] || []);
+  }
+
+  get selectedRuns(): RunCard[] {
+    return this.runsByEnv[this.selectedCategory()] || [];
+  }
+
+  get selectedCategoryDescription(): string {
+    return this.categories.find(category => category.id === this.selectedCategory())?.description || '';
+  }
+
+  get totalTrackedRuns(): number {
+    return this.allRuns.length;
+  }
+
+  get activeRuns(): number {
+    return this.allRuns.filter(run => ['pending', 'queued', 'inprogress', 'running'].includes(String(run.status || '').toLowerCase())).length;
+  }
+
+  get completedRuns(): number {
+    return this.allRuns.filter(run => String(run.status || '').toLowerCase() === 'completed').length;
+  }
+
+  get failedRuns(): number {
+    return this.allRuns.filter(run => ['failure', 'failed'].includes(String(run.status || '').toLowerCase())).length;
+  }
+
   selectCategory(categoryId: string): void {
     this.selectedCategory.set(categoryId);
     this.setCurrentCategoryName(categoryId);
+  }
+
+  categoryRunCount(categoryId: string): number {
+    return (this.runsByEnv[categoryId] || []).length;
+  }
+
+  badgeClass(status: string | null | undefined): string {
+    const normalized = String(status || '').toLowerCase();
+    if (normalized === 'pending' || normalized === 'queued') return 'text-bg-warning';
+    if (normalized === 'inprogress' || normalized === 'running') return 'text-bg-info';
+    if (normalized === 'completed') return 'text-bg-success';
+    if (normalized === 'failure' || normalized === 'failed') return 'text-bg-danger';
+    return 'text-bg-secondary';
+  }
+
+  runTypeLabel(run: RunCard): string {
+    return run.runType === 'test-cases' ? 'On-demand feature files' : 'Tag suite';
   }
 
   changeQuantity(productId: number, delta: number): void {

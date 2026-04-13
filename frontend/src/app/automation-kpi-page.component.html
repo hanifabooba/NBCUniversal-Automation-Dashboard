@@ -1,0 +1,234 @@
+<section class="automation-kpi-page py-4 py-lg-5">
+  <div class="container">
+    <div class="app-back-button-row mb-3">
+      <button type="button" class="btn btn-success btn-sm" (click)="goBack()">
+        <i class="bi bi-arrow-left me-1"></i>
+        Back
+      </button>
+    </div>
+
+    <div class="kpi-hero shadow-sm mb-4">
+      <div class="kpi-hero__copy">
+        <p class="kpi-hero__eyebrow mb-2">Automation KPI</p>
+        <h1 class="kpi-hero__title mb-2">Release readiness scorecard</h1>
+        <p class="kpi-hero__text mb-3">
+          A fast executive view built from the weekly automation board. Until we add dedicated KPI logic,
+          this page scores release health using pass rate, coverage, suite completion, and active risk.
+        </p>
+
+        <div class="kpi-hero__meta">
+          <span class="kpi-pill">
+            <i class="bi bi-calendar3 me-1"></i>
+            {{ boardLabel }}
+          </span>
+          <span class="kpi-pill">
+            <i class="bi bi-broadcast me-1"></i>
+            Last signal: {{ lastUpdatedLabel }}
+          </span>
+          <span class="kpi-pill">
+            <i class="bi bi-shield-check me-1"></i>
+            {{ postureLabel }}
+          </span>
+        </div>
+
+        <div class="d-flex flex-wrap gap-2 mt-3">
+          <a class="btn btn-success" routerLink="/automation-weekly-status">
+            <i class="bi bi-grid-1x2-fill me-1"></i>
+            Open weekly board
+          </a>
+          <button type="button" class="btn btn-outline-light" (click)="refresh()" [disabled]="loading">
+            <i class="bi bi-arrow-repeat me-1"></i>
+            {{ loading ? 'Refreshing…' : 'Refresh KPI' }}
+          </button>
+        </div>
+      </div>
+
+      <div class="kpi-dial-card">
+        <div class="kpi-dial" [style.background]="heroDialStyle">
+          <div class="kpi-dial__center">
+            <div class="kpi-dial__value">{{ currentMetrics.healthIndex }}</div>
+            <div class="kpi-dial__label">health index</div>
+          </div>
+        </div>
+        <div class="kpi-dial-card__summary">
+          <div class="kpi-dial-card__title">{{ postureLabel }}</div>
+          <p class="kpi-dial-card__copy mb-0">{{ postureCopy }}</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="card shadow-sm mb-4">
+      <div class="card-body">
+        <div class="kpi-filter-grid">
+          <div>
+            <label class="form-label small text-uppercase text-muted">Week picker</label>
+            <input
+              type="date"
+              class="form-control"
+              [ngModel]="selectedWeekInput"
+              (ngModelChange)="onWeekChange($event)"
+            >
+            <div class="form-text">KPI window normalized to the Monday-Friday working week.</div>
+          </div>
+
+          <div>
+            <label class="form-label small text-uppercase text-muted">Platform</label>
+            <select class="form-select" [(ngModel)]="filterPlatform" (ngModelChange)="refresh()">
+              <option *ngFor="let option of platformOptions" [value]="option.value">{{ option.label }}</option>
+            </select>
+          </div>
+
+          <div>
+            <label class="form-label small text-uppercase text-muted">Suite</label>
+            <select class="form-select" [(ngModel)]="filterSuite" (ngModelChange)="refresh()">
+              <option *ngFor="let option of suiteOptions" [value]="option.value">{{ option.label }}</option>
+            </select>
+          </div>
+
+          <div>
+            <label class="form-label small text-uppercase text-muted">Execution type</label>
+            <select class="form-select" [(ngModel)]="filterExecutionType" (ngModelChange)="refresh()">
+              <option *ngFor="let option of executionOptions" [value]="option.value">{{ option.label }}</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="alert alert-danger mt-3 mb-0" *ngIf="error">{{ error }}</div>
+      </div>
+    </div>
+
+    <div class="kpi-metric-grid mb-4">
+      <article class="kpi-metric-card shadow-sm" *ngFor="let card of metricCards">
+        <div class="kpi-metric-card__label">{{ card.label }}</div>
+        <div class="kpi-metric-card__value">{{ card.value }}</div>
+        <p class="kpi-metric-card__detail mb-2">{{ card.detail }}</p>
+        <div class="kpi-metric-card__trend" [class.is-positive]="card.trendTone === 'positive'" [class.is-negative]="card.trendTone === 'negative'">
+          {{ card.trend }}
+        </div>
+      </article>
+    </div>
+
+    <div class="kpi-operational-grid mb-4">
+      <article class="status-card status-card--success shadow-sm">
+        <div class="status-card__label">Successful suites</div>
+        <div class="status-card__value">{{ currentMetrics.successfulSuites }}</div>
+        <div class="status-card__meta">{{ currentMetrics.successRatio | number:'1.0-0' }}% of completed suites closed successfully.</div>
+      </article>
+      <article class="status-card status-card--warning shadow-sm">
+        <div class="status-card__label">In progress</div>
+        <div class="status-card__value">{{ currentMetrics.activeSuites }}</div>
+        <div class="status-card__meta">Queued or running suites still shaping the week.</div>
+      </article>
+      <article class="status-card status-card--danger shadow-sm">
+        <div class="status-card__label">Failed suites</div>
+        <div class="status-card__value">{{ currentMetrics.failedSuites }}</div>
+        <div class="status-card__meta">These suites are currently suppressing release confidence.</div>
+      </article>
+      <article class="status-card status-card--muted shadow-sm">
+        <div class="status-card__label">No signal yet</div>
+        <div class="status-card__value">{{ currentMetrics.pendingSuites }}</div>
+        <div class="status-card__meta">Suites still waiting for their first execution in the selected week.</div>
+      </article>
+    </div>
+
+    <div class="kpi-detail-grid">
+      <div class="detail-card detail-card--platforms shadow-sm">
+        <div class="detail-card__header">
+          <div>
+            <p class="detail-card__eyebrow mb-1">Breakdown</p>
+            <h2 class="detail-card__title mb-0">Platform performance</h2>
+          </div>
+        </div>
+
+        <div class="platform-list" *ngIf="platformSnapshots.length; else noPlatforms">
+          <article class="platform-card" *ngFor="let platform of platformSnapshots">
+            <div class="platform-card__topline">
+              <div>
+                <div class="platform-card__title">{{ platform.platform }}</div>
+                <div class="platform-card__meta">{{ platform.executedSuites }}/{{ platform.suites }} suites executed</div>
+              </div>
+              <span class="badge" [ngClass]="platform.failedSuites ? 'text-bg-danger' : 'text-bg-success'">
+                {{ platform.failedSuites ? (platform.failedSuites + ' at risk') : 'Healthy' }}
+              </span>
+            </div>
+
+            <div class="platform-card__stats">
+              <div>
+                <span>Pass rate</span>
+                <strong>{{ platform.passRate | number:'1.0-1' }}%</strong>
+              </div>
+              <div>
+                <span>Coverage</span>
+                <strong>{{ platform.coverage | number:'1.0-1' }}%</strong>
+              </div>
+            </div>
+
+            <div class="platform-bar">
+              <div class="platform-bar__fill" [style.width.%]="platform.passRate"></div>
+            </div>
+          </article>
+        </div>
+
+        <ng-template #noPlatforms>
+          <div class="text-muted">No platform KPI data available yet.</div>
+        </ng-template>
+      </div>
+
+      <div class="detail-stack">
+        <div class="detail-card shadow-sm">
+          <div class="detail-card__header">
+            <div>
+              <p class="detail-card__eyebrow mb-1">Strengths</p>
+              <h2 class="detail-card__title mb-0">Top performers</h2>
+            </div>
+          </div>
+
+          <div class="spotlight-list" *ngIf="strengths.length; else noStrengths">
+            <article class="spotlight-row" *ngFor="let row of strengths">
+              <div class="spotlight-row__copy">
+                <div class="spotlight-row__title">{{ row.label }}</div>
+                <div class="spotlight-row__meta">{{ row.platform }} · {{ row.suite }}</div>
+              </div>
+              <div class="spotlight-row__stats">
+                <span>{{ row.passingRate | number:'1.0-1' }}% pass</span>
+                <a *ngIf="row.resultsLink" [href]="row.resultsLink" target="_blank" rel="noreferrer">Report</a>
+              </div>
+            </article>
+          </div>
+
+          <ng-template #noStrengths>
+            <div class="text-muted">Completed suites will appear here once the week has execution data.</div>
+          </ng-template>
+        </div>
+
+        <div class="detail-card shadow-sm">
+          <div class="detail-card__header">
+            <div>
+              <p class="detail-card__eyebrow mb-1">Watchlist</p>
+              <h2 class="detail-card__title mb-0">Attention needed</h2>
+            </div>
+          </div>
+
+          <div class="spotlight-list" *ngIf="watchlist.length; else noWatchlist">
+            <article class="spotlight-row spotlight-row--risk" *ngFor="let row of watchlist">
+              <div class="spotlight-row__copy">
+                <div class="spotlight-row__title">{{ row.label }}</div>
+                <div class="spotlight-row__meta">
+                  {{ row.platform }} · {{ row.suite }} · {{ row.failed }} failed
+                </div>
+              </div>
+              <div class="spotlight-row__stats">
+                <span class="badge" [ngClass]="badgeClass(row.jobStatus)">{{ row.jobStatus }}</span>
+                <a *ngIf="row.resultsLink" [href]="row.resultsLink" target="_blank" rel="noreferrer">Report</a>
+              </div>
+            </article>
+          </div>
+
+          <ng-template #noWatchlist>
+            <div class="text-muted">No current risk rows. This is what the page should look like late in a strong week.</div>
+          </ng-template>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>

@@ -14,7 +14,8 @@ interface DashboardCard {
   standalone: true,
   selector: 'app-dashboard',
   imports: [CommonModule, RouterLink],
-  templateUrl: './dashboard.component.html'
+  templateUrl: './dashboard.component.html',
+  styleUrls: ['./dashboard.component.css']
 })
 export class DashboardComponent {
   cards = computed<DashboardCard[]>(() => {
@@ -29,10 +30,10 @@ export class DashboardComponent {
       link: '/automation-weekly-status'
     });
     list.push({
-      title: 'Release History',
-      description: 'Historical automation releases and outcomes.',
-      icon: 'bi-collection',
-      link: '/automation-weekly-status'
+      title: 'Automation KPI',
+      description: 'Executive scorecard for release readiness, stability, and coverage.',
+      icon: 'bi-speedometer2',
+      link: '/automation-kpi'
     });
     list.push({
       title: 'Test Cases Hub',
@@ -77,4 +78,36 @@ export class DashboardComponent {
   });
 
   constructor(public roles: RoleService) {}
+
+  get primaryCard(): DashboardCard | null {
+    return this.cards()[0] || null;
+  }
+
+  get secondaryCards(): DashboardCard[] {
+    return this.cards().slice(1);
+  }
+
+  get quickStats(): Array<{ label: string; value: string; detail: string }> {
+    const cardCount = this.cards().length;
+    const role = this.roles.currentRole();
+    const userName = this.roles.currentUser()?.name || 'team member';
+
+    return [
+      {
+        label: 'Active boards',
+        value: `${cardCount}`,
+        detail: 'Operational surfaces available from this landing dashboard.'
+      },
+      {
+        label: 'Signed in as',
+        value: userName,
+        detail: `Current role: ${role}`
+      },
+      {
+        label: 'Focus area',
+        value: 'Release control',
+        detail: 'Weekly status, KPI tracking, execution entry points, and native app staging.'
+      }
+    ];
+  }
 }

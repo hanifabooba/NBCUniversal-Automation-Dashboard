@@ -712,11 +712,39 @@ function saveEnvHealth(runs: EnvRun[]) {
   fs.writeFileSync(envHealthFile, JSON.stringify(runs, null, 2), 'utf8');
 }
 
-function loadResultRuns(): StoredResultRun[] {
+function mapStoredResultRunRow(row: any, includeData = false): StoredResultRun {
+  let data: any = undefined;
+  if (includeData) {
+    try {
+      data = row.data ? JSON.parse(row.data) : [];
+    } catch {
+      data = [];
+    }
+  }
+
+  return {
+    id: row.id,
+    name: row.name,
+    key: row.key,
+    resultUrl: row.resultUrl,
+    data,
+    createdAt: row.createdAt,
+    expiresAt: row.expiresAt,
+    passed: row.passed,
+    failed: row.failed,
+    skipped: row.skipped,
+    total: row.total,
+    hasResultHtml: !!row.hasResultHtml,
+    hasReportZip: !!row.hasReportZip
+  };
+}
+
+function loadResultRuns(includeData = false): StoredResultRun[] {
   try {
+    const dataColumn = includeData ? ', data' : '';
     const rows = db
       .prepare(
-        `SELECT id, name, key, resultUrl, data, createdAt, expiresAt, passed, failed, skipped, total,
+        `SELECT id, name, key, resultUrl${dataColumn}, createdAt, expiresAt, passed, failed, skipped, total,
                 (resultHtml IS NOT NULL AND length(resultHtml) > 0) as hasResultHtml,
                 (reportZip IS NOT NULL AND length(reportZip) > 0) as hasReportZip
          FROM test_runs
@@ -724,29 +752,7 @@ function loadResultRuns(): StoredResultRun[] {
       )
       .all() as any[];
     if (rows.length) {
-      return rows.map(row => {
-        let data: any = [];
-        try {
-          data = row.data ? JSON.parse(row.data) : [];
-        } catch {
-          data = [];
-        }
-        return {
-          id: row.id,
-          name: row.name,
-          key: row.key,
-          resultUrl: row.resultUrl,
-          data,
-          createdAt: row.createdAt,
-          expiresAt: row.expiresAt,
-          passed: row.passed,
-          failed: row.failed,
-          skipped: row.skipped,
-          total: row.total,
-          hasResultHtml: !!row.hasResultHtml,
-          hasReportZip: !!row.hasReportZip
-        };
-      });
+      return rows.map(row => mapStoredResultRunRow(row, includeData));
     }
   } catch (err) {
     console.warn('Failed to read test_runs from DB, falling back to file', err);
@@ -765,6 +771,52 @@ function loadResultRuns(): StoredResultRun[] {
   } catch {
     return [];
   }
+}
+
+function findStoredResultRunByKeys(keys: string[], includeData = false): StoredResultRun | undefined {
+  const uniqueKeys = Array.from(new Set((keys || []).map(key => String(key || '').trim()).filter(Boolean)));
+  if (!uniqueKeys.length) return undefined;
+
+  try {
+    const placeholders = uniqueKeys.map(() => '?').join(', ');
+    const dataColumn = includeData ? ', data' : '';
+    const rows = db
+      .prepare(
+        `SELECT id, name, key, resultUrl${dataColumn}, createdAt, expiresAt, passed, failed, skipped, total,
+                (resultHtml IS NOT NULL AND length(resultHtml) > 0) as hasResultHtml,
+                (reportZip IS NOT NULL AND length(reportZip) > 0) as hasReportZip
+         FROM test_runs
+         WHERE key IN (${placeholders})`
+      )
+      .all(...uniqueKeys) as any[];
+
+    if (!rows.length) return undefined;
+
+    const byKey = new Map<string, StoredResultRun>();
+    for (const row of rows) {
+      const mapped = mapStoredResultRunRow(row, includeData);
+      if (!mapped.key) continue;
+      if (mapped.expiresAt && Date.parse(mapped.expiresAt) <= Date.now()) continue;
+      byKey.set(mapped.key, mapped);
+    }
+
+    for (const key of uniqueKeys) {
+      const found = byKey.get(key);
+      if (found) return found;
+    }
+  } catch (err) {
+    console.warn('Failed DB lookup for test_runs keys', err);
+  }
+
+  return undefined;
+}
+
+function resolveStoredResultUrl(run: Pick<StoredResultRun, 'key' | 'resultUrl' | 'hasResultHtml'> | null | undefined): string | undefined {
+  if (!run) return undefined;
+  if (run.hasResultHtml && run.key) {
+    return `/api/results/result-html?key=${encodeURIComponent(run.key)}`;
+  }
+  return run.resultUrl || undefined;
 }
 
 function countStatuses(data: any[]): { passed: number; failed: number; skipped: number; total: number } {
@@ -1519,6 +1571,39 @@ app.post('/api/results/fetch-json', async (req, res) => {
     )
   );
 
+  const cachedRun = findStoredResultRunByKeys(candidateKeys, true);
+  if (cachedRun) {
+    const cachedData = Array.isArray(cachedRun.data) ? cachedRun.data : [];
+    const cachedSummary =
+      cachedRun.total || cachedRun.passed || cachedRun.failed || cachedRun.skipped
+        ? {
+            total: Number(cachedRun.total || 0),
+            passed: Number(cachedRun.passed || 0),
+            failed: Number(cachedRun.failed || 0),
+            skipped: Number(cachedRun.skipped || 0)
+          }
+        : cachedData.length
+          ? countStatuses(cachedData)
+          : undefined;
+
+    if (cachedData.length || cachedSummary) {
+      if (cachedData.length) {
+        ensureLatestTestFile();
+        fs.writeFileSync(latestTestFile, JSON.stringify(cachedData, null, 2), 'utf8');
+      }
+
+      return res.json({
+        key: cachedRun.key || baseKey,
+        saved: true,
+        data: cachedData,
+        resultUrl: resolveStoredResultUrl(cachedRun),
+        runId: cachedRun.id,
+        summary: cachedSummary,
+        note: cachedData.length ? 'db-cache' : 'db-summary'
+      });
+    }
+  }
+
   const prefixes = Array.from(
     new Set(
       expandedBaseKeys.map(k =>
@@ -1587,7 +1672,7 @@ app.post('/api/results/fetch-json', async (req, res) => {
     const nowIso = new Date().toISOString();
     const prefix = xmlSummary.usedKey.replace(/\/[^/]+$/, '');
     const resultLink = presignS3GetUrl(`${prefix}/result.html`) || s3UrlForKey(`${prefix}/result.html`);
-    const runs = loadResultRuns();
+    const runs = loadResultRuns(true);
     const existingIdx = runs.findIndex(r => r.key === baseKey);
     const id = existingIdx >= 0 ? runs[existingIdx].id : `${Date.now()}`;
     const createdAt = existingIdx >= 0 ? runs[existingIdx].createdAt : nowIso;
@@ -1644,7 +1729,7 @@ app.post('/api/results/fetch-json', async (req, res) => {
   // Save as a result run entry with inferred result.html link if possible
   const prefix = parsed.usedKey.replace(/\/?test\.json(\.zip|\.gz)?$/i, '');
   const resultLink = presignS3GetUrl(`${prefix}/result.html`) || s3UrlForKey(`${prefix}/result.html`);
-  const runs = loadResultRuns();
+  const runs = loadResultRuns(true);
   const existingIdx = runs.findIndex(r => r.key === parsed.usedKey);
   const nowIso = new Date().toISOString();
   const id = existingIdx >= 0 ? runs[existingIdx].id : `${Date.now()}`;
@@ -1704,7 +1789,7 @@ app.post('/api/results/upload-json', (req, res) => {
   const resultLink =
     body.resultUrl || presignS3GetUrl(`${prefix}/result.html`) || s3UrlForKey(`${prefix}/result.html`);
 
-  const runs = loadResultRuns();
+  const runs = loadResultRuns(true);
   const existingIdx = runs.findIndex(r => r.key === usedKey);
   const nowIso = new Date().toISOString();
   const id = existingIdx >= 0 ? runs[existingIdx].id : `${Date.now()}`;
@@ -1974,6 +2059,27 @@ app.get('/api/results/result-url', async (req, res) => {
   const swapped = swapReportTargetInKey(baseKey);
   if (swapped) addReportVariants(swapped);
 
+  const dbKeys = Array.from(
+    new Set(
+      candidates.flatMap(candidate => {
+        const keys = [candidate];
+        if (/\/result\.html$/i.test(candidate)) {
+          keys.push(candidate.replace(/\/result\.html$/i, '/test.json'));
+        } else if (/\/test-output\/index\.html$/i.test(candidate)) {
+          keys.push(candidate.replace(/\/test-output\/index\.html$/i, '/test.json'));
+        } else if (/\/emailable-report\.html$/i.test(candidate)) {
+          keys.push(candidate.replace(/\/emailable-report\.html$/i, '/test.json'));
+        }
+        return keys;
+      })
+    )
+  );
+  const cachedRun = findStoredResultRunByKeys(dbKeys, false);
+  const cachedUrl = resolveStoredResultUrl(cachedRun);
+  if (cachedRun && cachedUrl) {
+    return res.json({ key, url: cachedUrl, resolvedKey: cachedRun.key || key, note: 'db-cache' });
+  }
+
   const resolvedKey =
     (await resolveS3Key(candidates)) ||
     pickBestCandidate(candidates, preferredTarget) ||
@@ -1987,27 +2093,47 @@ app.get('/api/results/result-url', async (req, res) => {
 // Result runs storage (full test.json with result link)
 app.get('/api/result-runs', (_req, res) => {
   const now = Date.now();
-  const runs = loadResultRuns()
+  const runs = loadResultRuns(false)
     .filter(r => !r.expiresAt || Date.parse(r.expiresAt) > now)
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   res.json(runs);
 });
 
 app.post('/api/result-runs', (req, res) => {
-  const { name, key, resultUrl, data } = req.body as Partial<StoredResultRun>;
+  const { name, key, resultUrl, data, passed, failed, skipped, total } = req.body as Partial<StoredResultRun>;
   if (!data && !key) return res.status(400).json({ message: 'key or data is required' });
-  const runs = loadResultRuns();
-  const id = `${Date.now()}`;
-  const createdAt = new Date().toISOString();
+  const runs = loadResultRuns(true);
+  const existing =
+    (key ? runs.find(run => run.key === key) : undefined) ||
+    (key
+      ? (db.prepare('SELECT id, createdAt, name, key, resultUrl, expiresAt, passed, failed, skipped, total FROM test_runs WHERE key = ?').get(key) as
+          | Partial<StoredResultRun>
+          | undefined)
+      : undefined);
+  const id = existing?.id || `${Date.now()}`;
+  const createdAt = existing?.createdAt || new Date().toISOString();
   const entry: StoredResultRun = {
     id,
-    name: name || key || `Run ${createdAt}`,
+    name: name || existing?.name || key || `Run ${createdAt}`,
     key,
-    resultUrl,
+    resultUrl: resultUrl || existing?.resultUrl,
     data,
-    createdAt
+    createdAt,
+    expiresAt: existing?.expiresAt,
+    passed: passed ?? existing?.passed,
+    failed: failed ?? existing?.failed,
+    skipped: skipped ?? existing?.skipped,
+    total: total ?? existing?.total
   };
-  runs.push(entry);
+  const existingIdx = key ? runs.findIndex(run => run.key === key) : -1;
+  if (existingIdx >= 0) {
+    runs[existingIdx] = {
+      ...runs[existingIdx],
+      ...entry
+    };
+  } else {
+    runs.push(entry);
+  }
   saveResultRuns(runs);
   res.status(201).json(entry);
 });

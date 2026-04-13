@@ -1,4 +1,4 @@
-<section class="py-4">
+<section class="test-cases-hub-page py-4 py-lg-5">
   <div class="mb-4">
     <div class="app-back-button-row mb-3">
       <button type="button" class="btn btn-success btn-sm" (click)="goBack()">
@@ -6,30 +6,76 @@
         Back
       </button>
     </div>
-    <div>
-      <p class="text-success text-uppercase small mb-1">Test Cases Hub</p>
-      <h1 class="h4 mb-0">Centralized QA test case library</h1>
-      <div class="text-muted small">Quick access to all test case sources and documentation.</div>
+    <div class="cases-hero shadow-sm">
+      <div>
+        <p class="cases-hero__eyebrow mb-2">Test Cases Hub</p>
+        <h1 class="cases-hero__title mb-2">Centralized QA test case library</h1>
+        <p class="cases-hero__copy mb-3">
+          Quick access to external test case sources, regression documentation, and living reference material used by the QA team.
+        </p>
+
+        <div class="cases-hero__pills">
+          <span class="cases-pill">
+            <i class="bi bi-journal-text me-1"></i>
+            {{ totalSources }} source{{ totalSources === 1 ? '' : 's' }}
+          </span>
+          <span class="cases-pill" *ngIf="sourceTags.length">
+            <i class="bi bi-tags me-1"></i>
+            {{ sourceTags.join(' • ') }}
+          </span>
+        </div>
+      </div>
+
+      <div class="cases-hero__aside">
+        <div class="cases-hero__stats">
+          <article class="cases-stat-card">
+            <div class="cases-stat-card__label">Libraries</div>
+            <div class="cases-stat-card__value">{{ totalSources }}</div>
+            <div class="cases-stat-card__detail">Reference sources currently linked from this hub.</div>
+          </article>
+          <article class="cases-stat-card">
+            <div class="cases-stat-card__label">Providers</div>
+            <div class="cases-stat-card__value">{{ sourceTags.length }}</div>
+            <div class="cases-stat-card__detail">Distinct platforms represented in the current link set.</div>
+          </article>
+        </div>
+      </div>
     </div>
   </div>
 
-  <div *ngIf="links.length; else emptyState" class="row g-3">
-    <div class="col-12 col-md-6 col-lg-4" *ngFor="let link of links">
-      <a class="text-decoration-none h-100 d-block" [href]="link.url" target="_blank" rel="noreferrer">
-        <div class="card h-100 shadow-sm hover-lift">
-          <div class="card-body">
-            <div class="d-flex align-items-center justify-content-between mb-2">
-              <div class="fw-semibold">{{ link.title }}</div>
-              <span *ngIf="link.tag" class="badge text-bg-light">{{ link.tag }}</span>
-            </div>
-            <div class="text-muted small">{{ link.description }}</div>
-          </div>
+  <div class="card shadow-sm cases-panel">
+    <div class="card-body">
+      <div class="d-flex flex-column flex-md-row align-items-md-start justify-content-between gap-3 mb-4">
+        <div>
+          <h2 class="cases-panel__title mb-1">Available reference sources</h2>
+          <div class="cases-panel__copy">Open any source below to jump directly into the external documentation or spreadsheet.</div>
         </div>
-      </a>
+        <span class="badge rounded-pill text-bg-light">{{ totalSources }} links</span>
+      </div>
+
+      <div *ngIf="links.length; else emptyState" class="cases-grid">
+        <a class="cases-link-card" *ngFor="let link of links" [href]="link.url" target="_blank" rel="noreferrer">
+          <div class="cases-link-card__topline">
+            <div class="cases-link-card__title">{{ link.title }}</div>
+            <span *ngIf="link.tag" class="badge text-bg-light">{{ link.tag }}</span>
+          </div>
+          <div class="cases-link-card__copy">{{ link.description }}</div>
+          <div class="cases-link-card__footer">
+            <span class="cases-link-card__provider" *ngIf="link.tag">
+              <i class="bi bi-box-arrow-up-right me-1"></i>
+              {{ link.tag }}
+            </span>
+            <span class="cases-link-card__cta">
+              Open source
+              <i class="bi bi-arrow-right-short"></i>
+            </span>
+          </div>
+        </a>
+      </div>
     </div>
   </div>
 
   <ng-template #emptyState>
-    <div class="alert alert-secondary mb-0">No test case links yet. Add them to the Test Cases Hub.</div>
+    <div class="cases-empty">No test case links yet. Add them to the Test Cases Hub.</div>
   </ng-template>
 </section>

@@ -1,18 +1,58 @@
-<section class="py-4">
-  <div class="d-flex flex-column flex-md-row align-items-start justify-content-between gap-2 mb-3">
-      <div>
-        <p class="text-success text-uppercase small mb-1">Team Weekly Task</p>
-        <h1 class="h4 mb-0">Plan, track, and report by week</h1>
-        <div class="text-muted small">Week window: {{ weekRange() }} (Mon–Fri)</div>
+<section class="team-weekly-page py-4 py-lg-5">
+  <div class="team-weekly-hero shadow-sm mb-4">
+    <div>
+      <p class="team-weekly-hero__eyebrow mb-2">Team Weekly Task</p>
+      <h1 class="team-weekly-hero__title mb-2">Plan, track, and report by week</h1>
+      <p class="team-weekly-hero__copy mb-3">
+        Coordinate weekly engineering work with one planning surface, a status board, and a lightweight report dashboard.
+      </p>
+
+      <div class="team-weekly-hero__pills">
+        <span class="team-weekly-pill">
+          <i class="bi bi-calendar3 me-1"></i>
+          {{ weekRange() }}
+        </span>
+        <span class="team-weekly-pill">
+          <i class="bi bi-layout-text-window me-1"></i>
+          {{ activeTabLabel }}
+        </span>
+        <span class="team-weekly-pill">
+          <i class="bi bi-people me-1"></i>
+          {{ currentWeekStats.total }} task{{ currentWeekStats.total === 1 ? '' : 's' }} this week
+        </span>
       </div>
-    <div class="d-flex align-items-center gap-2">
-      <button class="btn btn-outline-secondary btn-sm" type="button" (click)="changeWeek(-1)">Prev week</button>
-      <button class="btn btn-outline-secondary btn-sm" type="button" (click)="selectedWeek.set(currentWeek())">Current week</button>
-      <button class="btn btn-outline-secondary btn-sm" type="button" (click)="jumpToFuture()">Future</button>
+    </div>
+
+    <div class="team-weekly-hero__aside">
+      <div class="team-weekly-hero__stats">
+        <article class="team-weekly-stat-card">
+          <div class="team-weekly-stat-card__label">Done</div>
+          <div class="team-weekly-stat-card__value">{{ currentWeekStats.done }}</div>
+          <div class="team-weekly-stat-card__detail">Tasks finished in the selected week.</div>
+        </article>
+        <article class="team-weekly-stat-card">
+          <div class="team-weekly-stat-card__label">In progress</div>
+          <div class="team-weekly-stat-card__value">{{ currentWeekStats.inProgress }}</div>
+          <div class="team-weekly-stat-card__detail">Work currently moving through execution.</div>
+        </article>
+        <article class="team-weekly-stat-card">
+          <div class="team-weekly-stat-card__label">Blocked</div>
+          <div class="team-weekly-stat-card__value">{{ currentWeekStats.blocked }}</div>
+          <div class="team-weekly-stat-card__detail">Items waiting on another dependency or decision.</div>
+        </article>
+      </div>
+
+      <div class="team-weekly-week-nav">
+        <button class="btn btn-outline-light btn-sm" type="button" (click)="changeWeek(-1)">Prev week</button>
+        <button class="btn btn-outline-light btn-sm" type="button" (click)="selectedWeek.set(currentWeek())">Current week</button>
+        <button class="btn btn-outline-light btn-sm" type="button" (click)="jumpToFuture()">Future</button>
+      </div>
     </div>
   </div>
 
-  <ul class="nav nav-pills mb-3">
+  <div class="team-weekly-tabs mb-4">
+    <div class="team-weekly-tabs__list">
+  <ul class="nav nav-pills mb-0">
     <li class="nav-item">
       <button class="nav-link" [class.active]="activeTab() === 'weekly'" (click)="switchTab('weekly')">Weekly Task</button>
     </li>
@@ -23,12 +63,15 @@
       <button class="nav-link" [class.active]="activeTab() === 'report'" (click)="switchTab('report')">Report Dashboard</button>
     </li>
   </ul>
+    </div>
+    <div class="team-weekly-tabs__copy">{{ activeTabCopy }}</div>
+  </div>
 
   <!-- Weekly Task tab -->
   <div *ngIf="activeTab() === 'weekly'">
-    <div class="card mb-3">
+    <div class="card mb-3 team-weekly-panel shadow-sm">
       <div class="card-body">
-        <h2 class="h6 text-uppercase text-muted mb-3">Add weekly task</h2>
+        <h2 class="team-weekly-panel__title mb-3">Add weekly task</h2>
         <div class="row g-3">
           <div class="col-md-4">
             <label class="form-label small text-muted">Team</label>
@@ -80,10 +123,16 @@
       </div>
     </div>
 
-    <div class="card">
+    <div class="card team-weekly-panel shadow-sm">
       <div class="card-body table-responsive">
-        <h2 class="h6 text-uppercase text-muted mb-3">Tasks for week of {{ selectedWeek() }}</h2>
-        <table class="table table-bordered align-middle">
+        <div class="d-flex flex-column flex-md-row align-items-md-start justify-content-between gap-3 mb-3">
+          <div>
+            <h2 class="team-weekly-panel__title mb-1">Tasks for week of {{ selectedWeek() }}</h2>
+            <div class="team-weekly-panel__copy">Structured weekly planning view for the selected Monday-Friday window.</div>
+          </div>
+          <span class="badge rounded-pill text-bg-light">{{ tasksForWeek().length }} tasks</span>
+        </div>
+        <table class="table table-bordered align-middle team-weekly-table">
           <thead>
             <tr>
               <th>Team</th>
@@ -116,21 +165,21 @@
 
   <!-- Task Status Board tab -->
   <div *ngIf="activeTab() === 'board'">
-    <div class="row g-3">
+    <div class="row g-3 team-weekly-board">
       <div class="col-12 col-md-6 col-xl" *ngFor="let col of statusColumns">
-        <div class="card h-100">
-          <div class="card-header fw-semibold text-uppercase small" [ngClass]="col.color">
+        <div class="card h-100 team-weekly-column shadow-sm">
+          <div class="card-header fw-semibold text-uppercase small team-weekly-column__header" [ngClass]="col.color">
             {{ col.label }}
           </div>
           <div
-            class="card-body d-flex flex-column gap-2"
+            class="card-body d-flex flex-column gap-2 team-weekly-column__body"
             cdkDropList
             [id]="col.key"
             [cdkDropListData]="tasksByStatus(col.key)"
             [cdkDropListConnectedTo]="dropListIds"
             (cdkDropListDropped)="drop($event)"
           >
-            <div class="card shadow-sm border" cdkDrag *ngFor="let t of tasksByStatus(col.key)">
+            <div class="card shadow-sm border team-weekly-task-card" cdkDrag *ngFor="let t of tasksByStatus(col.key)">
               <div class="card-body p-2">
                 <div class="d-flex justify-content-between align-items-center mb-1">
                   <div class="fw-semibold">{{ t.title }}</div>
@@ -174,7 +223,7 @@
 
   <!-- Report Dashboard tab -->
 <div *ngIf="activeTab() === 'report'">
-    <div class="card mb-3">
+    <div class="card mb-3 team-weekly-panel shadow-sm">
       <div class="card-body d-flex flex-wrap align-items-center gap-3">
         <div class="d-flex align-items-center gap-2">
           <label class="text-muted small mb-0">View</label>
@@ -202,7 +251,7 @@
 
     <div class="row g-3">
       <div class="col-12 col-lg-5">
-        <div class="card h-100">
+        <div class="card h-100 team-weekly-panel shadow-sm">
           <div class="card-body text-center">
             <p class="text-uppercase text-muted small mb-1">Progress</p>
             <div class="pie pie-report mx-auto" [style.background]="pieStyle()">
@@ -222,9 +271,9 @@
         </div>
       </div>
       <div class="col-12 col-lg-7">
-        <div class="card h-100">
+        <div class="card h-100 team-weekly-panel shadow-sm">
           <div class="card-body">
-            <h2 class="h6 text-uppercase text-muted mb-3">Tasks by Team</h2>
+            <h2 class="team-weekly-panel__title mb-3">Tasks by Team</h2>
             <div *ngIf="stats().byTeam | keyvalue as entries; else noTeams">
               <div class="mb-2" *ngFor="let entry of entries">
                 <div class="d-flex justify-content-between small">
@@ -276,68 +325,3 @@
     </div>
   </div>
 </div>
-<style>
-.pie-report {
-  width: min(320px, 70vw);
-  height: min(320px, 70vw);
-  border-radius: 50%;
-  position: relative;
-  display: grid;
-  place-items: center;
-  box-shadow:
-    0 12px 30px rgba(0, 0, 0, 0.08),
-    0 0 0 10px rgba(13, 110, 253, 0.05);
-  isolation: isolate;
-  overflow: visible;
-}
-.pie-report::before {
-  content: '';
-  position: absolute;
-  inset: -10px;
-  border-radius: 50%;
-  background: conic-gradient(
-      rgba(25, 135, 84, 0.2),
-      rgba(13, 110, 253, 0.18),
-      rgba(255, 193, 7, 0.18),
-      rgba(220, 53, 69, 0.2),
-      rgba(173, 181, 189, 0.15)
-  );
-  filter: blur(12px);
-  opacity: 0.9;
-  z-index: 0;
-  pointer-events: none;
-}
-.pie__center--report {
-  width: 46%;
-  height: 46%;
-  border-radius: 50%;
-  background: linear-gradient(145deg, #ffffff, #f4f7fb);
-  display: grid;
-  place-items: center;
-  text-align: center;
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.06);
-  z-index: 2;
-}
-.pie__value {
-  font-weight: 700;
-  font-size: 1.3rem;
-}
-.pie__label {
-  font-size: 0.75rem;
-  color: #6c757d;
-}
-.blocked-modal-backdrop {
-  position: fixed;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 1.5rem;
-  background: rgba(15, 23, 42, 0.45);
-  backdrop-filter: blur(2px);
-  z-index: 1055;
-}
-.blocked-modal-card {
-  width: min(520px, 92vw);
-}
-</style>

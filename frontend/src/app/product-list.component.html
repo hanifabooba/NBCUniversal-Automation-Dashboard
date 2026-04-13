@@ -1,82 +1,172 @@
-<section class="mb-3">
-  <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
-    <div>
-      <h1 class="mb-1">Production Site Health</h1>
-      <p class="text-muted mb-0">Daily snapshots from Jenkins site checks.</p>
+<section class="environment-health-page py-4 py-lg-5">
+  <div class="container">
+    <div class="environment-health-hero shadow-sm mb-4">
+      <div>
+        <p class="environment-health-hero__eyebrow mb-2">Environment health</p>
+        <h1 class="environment-health-hero__title mb-2">Production site health</h1>
+        <p class="environment-health-hero__copy mb-3">
+          Daily Jenkins snapshots for site readiness, service drift, and operational signal quality across the production health lane.
+        </p>
+
+        <div class="environment-health-hero__pills">
+          <span class="environment-health-pill">
+            <i class="bi bi-calendar3 me-1"></i>
+            {{ selectedDayLabel }}
+          </span>
+          <span class="environment-health-pill" *ngIf="latestRun">
+            <i class="bi bi-broadcast me-1"></i>
+            Latest capture: {{ latestRun.fetchedAt | date:'short' }}
+          </span>
+          <span class="environment-health-pill">
+            <i class="bi bi-hdd-network me-1"></i>
+            {{ totalSnapshots }} snapshot{{ totalSnapshots === 1 ? '' : 's' }} in view
+          </span>
+        </div>
+      </div>
+
+      <div class="environment-health-hero__aside">
+        <div class="environment-health-hero__stats">
+          <article class="environment-health-stat-card">
+            <div class="environment-health-stat-card__label">Passed checks</div>
+            <div class="environment-health-stat-card__value">{{ aggregateCounts.pass }}</div>
+            <div class="environment-health-stat-card__detail">Healthy checks across the visible time window.</div>
+          </article>
+          <article class="environment-health-stat-card">
+            <div class="environment-health-stat-card__label">Warnings</div>
+            <div class="environment-health-stat-card__value">{{ aggregateCounts.warn }}</div>
+            <div class="environment-health-stat-card__detail">Signals that deserve monitoring before they degrade.</div>
+          </article>
+          <article class="environment-health-stat-card">
+            <div class="environment-health-stat-card__label">Failures</div>
+            <div class="environment-health-stat-card__value">{{ aggregateCounts.fail }}</div>
+            <div class="environment-health-stat-card__detail">Checks that currently require attention or rerun validation.</div>
+          </article>
+        </div>
+      </div>
     </div>
-    <div class="d-flex align-items-center gap-2">
-      <select class="form-select form-select-sm" style="min-width: 180px" [(ngModel)]="selectedDay">
-        <option *ngFor="let d of days" [ngValue]="d">{{ d === 'all' ? 'All days' : (d | date:'mediumDate') }}</option>
-      </select>
-      <button class="btn btn-success btn-sm" type="button" (click)="syncNow()" [disabled]="loading">
-        <i class="bi bi-arrow-repeat me-1"></i>
-        Sync latest
-      </button>
+
+    <div class="card shadow-sm environment-health-toolbar mb-4">
+      <div class="card-body">
+        <div class="environment-health-filter-grid">
+          <div>
+            <label class="form-label small text-uppercase text-muted">Snapshot day</label>
+            <select class="form-select" [(ngModel)]="selectedDay">
+              <option *ngFor="let d of days" [ngValue]="d">{{ d === 'all' ? 'All days' : (d | date:'mediumDate') }}</option>
+            </select>
+          </div>
+
+          <div>
+            <label class="form-label small text-uppercase text-muted">Latest site</label>
+            <div class="form-control bg-light">{{ latestRun?.site || 'No runs yet' }}</div>
+          </div>
+
+          <div class="d-flex align-items-end gap-2 flex-wrap">
+            <button class="btn btn-success" type="button" (click)="syncNow()" [disabled]="loading">
+              <i class="bi bi-arrow-repeat me-1"></i>
+              Sync latest
+            </button>
+            <button class="btn btn-outline-secondary" type="button" (click)="fetchRuns()" [disabled]="loading">
+              Refresh
+            </button>
+          </div>
+        </div>
+
+        <div *ngIf="error" class="alert alert-danger mt-3 mb-0">{{ error }}</div>
+        <div *ngIf="loading" class="alert alert-info mt-3 mb-0">Loading environment health…</div>
+      </div>
+    </div>
+
+    <div class="environment-health-summary-grid mb-4">
+      <article class="environment-health-summary-card environment-health-summary-card--pass shadow-sm">
+        <div class="environment-health-summary-card__label">Pass checks</div>
+        <div class="environment-health-summary-card__value">{{ aggregateCounts.pass }}</div>
+        <div class="environment-health-summary-card__detail">Green signals in the current filter.</div>
+      </article>
+      <article class="environment-health-summary-card environment-health-summary-card--warn shadow-sm">
+        <div class="environment-health-summary-card__label">Warning checks</div>
+        <div class="environment-health-summary-card__value">{{ aggregateCounts.warn }}</div>
+        <div class="environment-health-summary-card__detail">Items that should stay on the radar.</div>
+      </article>
+      <article class="environment-health-summary-card environment-health-summary-card--fail shadow-sm">
+        <div class="environment-health-summary-card__label">Fail checks</div>
+        <div class="environment-health-summary-card__value">{{ aggregateCounts.fail }}</div>
+        <div class="environment-health-summary-card__detail">Critical issues or broken monitors.</div>
+      </article>
+    </div>
+
+    <div class="card shadow-sm environment-health-panel">
+      <div class="card-body">
+        <div class="d-flex flex-column flex-md-row align-items-md-start justify-content-between gap-3 mb-4">
+          <div>
+            <p class="environment-health-panel__eyebrow mb-1">Snapshots</p>
+            <h2 class="environment-health-panel__title mb-1">Health run history</h2>
+            <div class="environment-health-panel__copy">Open any snapshot to inspect the underlying Jenkins checks and failure detail.</div>
+          </div>
+          <span class="badge rounded-pill text-bg-light">{{ visibleRuns.length }} visible</span>
+        </div>
+
+        <div class="environment-health-runs" *ngIf="visibleRuns.length; else noRuns">
+          <article class="environment-health-run-card" *ngFor="let run of visibleRuns">
+            <button class="environment-health-run-card__toggle p-0 w-100 text-start" type="button" (click)="toggle(run)">
+              <div class="environment-health-run-card__topline">
+                <div>
+                  <div class="environment-health-run-card__site">{{ run.site }}</div>
+                  <div class="environment-health-run-card__title">{{ run.fetchedAt | date:'fullDate' }}</div>
+                  <div class="environment-health-run-card__meta">Fetched: {{ run.fetchedAt | date:'short' }}</div>
+                </div>
+                <div class="text-end">
+                  <span class="badge rounded-pill text-bg-light d-block mb-2">Checks: {{ run.checks?.length || 0 }}</span>
+                  <i class="bi" [ngClass]="isOpen(run) ? 'bi-chevron-up' : 'bi-chevron-down'"></i>
+                </div>
+              </div>
+            </button>
+
+            <div class="environment-health-run-card__stack">
+              <div class="environment-health-run-card__chips">
+                <span class="badge bg-success-subtle text-success-emphasis">Pass: {{ statusCounts(run).pass }}</span>
+                <span class="badge bg-warning-subtle text-warning-emphasis">Warn: {{ statusCounts(run).warn }}</span>
+                <span class="badge bg-danger-subtle text-danger-emphasis">Fail: {{ statusCounts(run).fail }}</span>
+                <span class="environment-health-chip environment-health-chip--neutral">{{ latestStatusLabel(run) }}</span>
+              </div>
+
+              <div class="environment-health-checks" *ngIf="isOpen(run)">
+                <div class="environment-health-check" *ngFor="let check of run.checks">
+                  <span class="badge rounded-pill" [ngClass]="statusBadgeClass(check.status)">
+                    {{ check.status }}
+                  </span>
+                  <div>
+                    <div class="environment-health-check__name">{{ check.name }}</div>
+                    <div class="environment-health-check__detail">{{ check.detail }}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="environment-health-run-card__footer">
+              <a class="btn btn-outline-success btn-sm" [href]="run.sourceUrl" target="_blank" rel="noopener">
+                View Jenkins report
+              </a>
+              <span class="environment-health-run-card__footer-id">Run ID: {{ run.id }}</span>
+            </div>
+          </article>
+        </div>
+
+        <ng-template #noRuns>
+          <div class="environment-health-empty">
+            <div class="environment-health-empty__icon">
+              <i class="bi bi-hdd-network"></i>
+            </div>
+            <div class="environment-health-empty__title">No environment health runs yet</div>
+            <div class="environment-health-empty__copy">
+              Sync the latest Jenkins snapshot to start building the environment-health timeline.
+            </div>
+            <div class="d-flex justify-content-center gap-2 flex-wrap">
+              <button class="btn btn-success btn-sm" type="button" (click)="syncNow()" [disabled]="loading">Sync latest</button>
+              <button class="btn btn-outline-secondary btn-sm" type="button" (click)="fetchRuns()" [disabled]="loading">Refresh</button>
+            </div>
+          </div>
+        </ng-template>
+      </div>
     </div>
   </div>
-  <div *ngIf="error" class="alert alert-danger">{{ error }}</div>
-  <div *ngIf="loading" class="alert alert-info">Loading environment health…</div>
-</section>
-
-<section class="grid grid-2">
-  <ng-container *ngIf="filteredRuns().length; else noRuns">
-    <article class="slider-item" *ngFor="let run of filteredRuns()">
-      <div class="slider-item-content">
-        <button class="btn btn-link p-0 w-100 text-start" type="button" (click)="toggle(run)">
-          <div class="d-flex align-items-start justify-content-between gap-2 mb-2">
-            <div>
-              <p class="text-uppercase text-success fw-semibold small mb-1">{{ run.site }}</p>
-              <h2 class="h5 mb-0">{{ run.fetchedAt | date:'fullDate' }}</h2>
-              <small class="text-muted">Fetched: {{ run.fetchedAt | date:'short' }}</small>
-            </div>
-            <div class="text-end">
-              <span class="badge bg-light text-muted d-block">Checks: {{ run.checks?.length || 0 }}</span>
-              <i class="bi" [ngClass]="isOpen(run) ? 'bi-chevron-up' : 'bi-chevron-down'"></i>
-            </div>
-          </div>
-        </button>
-
-        <div class="d-flex flex-wrap gap-2 mb-3">
-          <span class="badge bg-success-subtle text-success-emphasis">Pass: {{ statusCounts(run).pass }}</span>
-          <span class="badge bg-warning-subtle text-warning-emphasis">Warn: {{ statusCounts(run).warn }}</span>
-          <span class="badge bg-danger-subtle text-danger-emphasis">Fail: {{ statusCounts(run).fail }}</span>
-        </div>
-
-        <div class="list-unstyled small" *ngIf="isOpen(run)">
-          <div class="d-flex align-items-start gap-2" *ngFor="let check of run.checks">
-            <span
-              class="badge rounded-pill"
-              [ngClass]="{
-                'bg-success-subtle text-success-emphasis': check.status === 'PASS',
-                'bg-warning-subtle text-warning-emphasis': check.status === 'WARNING',
-                'bg-danger-subtle text-danger-emphasis': check.status !== 'PASS' && check.status !== 'WARNING'
-              }"
-            >
-              {{ check.status }}
-            </span>
-            <div>
-              <div class="fw-semibold">{{ check.name }}</div>
-              <div class="text-muted">{{ check.detail }}</div>
-            </div>
-          </div>
-        </div>
-
-        <div class="d-flex align-items-center justify-content-between mt-3">
-          <a class="btn btn-outline-success btn-sm" [href]="run.sourceUrl" target="_blank" rel="noopener">
-            View Jenkins report
-          </a>
-          <span class="text-muted small">Run ID: {{ run.id }}</span>
-        </div>
-      </div>
-    </article>
-  </ng-container>
-  <ng-template #noRuns>
-    <article class="slider-item">
-      <div class="slider-item-content text-center">
-        <p class="text-muted mb-3">No environment health runs yet.</p>
-        <button class="btn btn-success btn-sm" type="button" (click)="syncNow()" [disabled]="loading">Sync latest</button>
-        <button class="btn btn-outline-secondary btn-sm ms-2" type="button" (click)="fetchRuns()" [disabled]="loading">Refresh</button>
-      </div>
-    </article>
-  </ng-template>
 </section>

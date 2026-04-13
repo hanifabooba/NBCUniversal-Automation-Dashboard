@@ -9,7 +9,8 @@ import { ReleaseService, ReleaseEntry } from './release.service';
   standalone: true,
   selector: 'app-order-fulfillment-board',
   imports: [CommonModule, FormsModule],
-  templateUrl: './order-fulfillment-board.component.html'
+  templateUrl: './order-fulfillment-board.component.html',
+  styleUrls: ['./order-fulfillment-board.component.css']
 })
 export class OrderFulfillmentBoardComponent {
   readonly releases = computed<ReleaseEntry[]>(() => this.releaseService.releasesSignal());
@@ -20,6 +21,30 @@ export class OrderFulfillmentBoardComponent {
     private location: Location,
     private router: Router
   ) {}
+
+  get totalReleases(): number {
+    return this.releases().length;
+  }
+
+  get releasesWithResults(): number {
+    return this.releases().filter(release => !!release.resultUrl).length;
+  }
+
+  get productionReleases(): number {
+    return this.releases().filter(release => String(release.environment || '').toLowerCase().startsWith('prod')).length;
+  }
+
+  get onDemandReleases(): number {
+    return this.releases().filter(release => release.runType === 'test-cases').length;
+  }
+
+  get latestRelease(): ReleaseEntry | null {
+    return this.releases()[0] || null;
+  }
+
+  runTypeLabel(release: ReleaseEntry): string {
+    return release.runType === 'test-cases' ? 'On-demand feature files' : 'Tag suite';
+  }
 
   goBack(): void {
     if (typeof window !== 'undefined' && window.history.length > 1) {

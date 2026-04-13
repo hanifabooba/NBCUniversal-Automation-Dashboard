@@ -23,7 +23,8 @@ interface WeeklyTask {
   standalone: true,
   selector: 'app-team-weekly-task',
   imports: [CommonModule, FormsModule, DragDropModule],
-  templateUrl: './team-weekly-task.component.html'
+  templateUrl: './team-weekly-task.component.html',
+  styleUrls: ['./team-weekly-task.component.css']
 })
 export class TeamWeeklyTaskComponent implements OnInit {
   activeTab = signal<'weekly' | 'board' | 'report'>('weekly');
@@ -106,6 +107,44 @@ export class TeamWeeklyTaskComponent implements OnInit {
       total
     };
   });
+
+  get currentWeekStats() {
+    const tasks = this.tasksForWeek();
+    return {
+      total: tasks.length,
+      assigned: tasks.filter(task => task.status === 'assigned').length,
+      pending: tasks.filter(task => task.status === 'pending').length,
+      blocked: tasks.filter(task => task.status === 'blocked').length,
+      inProgress: tasks.filter(task => task.status === 'in-progress').length,
+      done: tasks.filter(task => task.status === 'done').length
+    };
+  }
+
+  get activeTabLabel(): string {
+    switch (this.activeTab()) {
+      case 'weekly':
+        return 'Weekly planning';
+      case 'board':
+        return 'Kanban board';
+      case 'report':
+        return 'Reporting view';
+      default:
+        return 'Weekly planning';
+    }
+  }
+
+  get activeTabCopy(): string {
+    switch (this.activeTab()) {
+      case 'weekly':
+        return 'Capture weekly work, assign ownership, and lock the delivery plan for the selected week.';
+      case 'board':
+        return 'Drag tasks across execution states so blockers, pending work, and completed items stay visible.';
+      case 'report':
+        return 'Use the filtered dashboard to understand progress, workload distribution, and completion rate.';
+      default:
+        return 'Capture weekly work, assign ownership, and lock the delivery plan for the selected week.';
+    }
+  }
 
   ngOnInit(): void {
     this.loadTasks();
@@ -233,7 +272,7 @@ export class TeamWeeklyTaskComponent implements OnInit {
     const c3 = c2 + pendingPct;
     const c4 = c3 + blockedPct;
     return `conic-gradient(
-      #198754 0% ${c1}%,
+      var(--nbcuniversal-green) 0% ${c1}%,
       #0d6efd ${c1}% ${c2}%,
       #ffc107 ${c2}% ${c3}%,
       #dc3545 ${c3}% ${c4}%,

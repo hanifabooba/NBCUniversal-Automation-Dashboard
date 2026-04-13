@@ -13,93 +13,56 @@ export class TestResultsComponent implements OnInit {
   loading = signal(true);
   error = signal<string | null>(null);
   runLoading = signal(false);
-  saving = signal(false);
-  saveMessage = signal<string | null>(null);
   currentSummary: RunSummary = { name: 'Loading…', passed: 0, failed: 0, skipped: 0, total: 0 };
-  savedRuns: RunSummary[] = [];
   resultRuns: ResultRun[] = [];
   selectedRunId: string | null = null;
   selectedResultUrl: string | null = null;
+  private resultRunsById = new Map<string, ResultRun>();
+  private selectionVersion = 0;
 
   constructor(private testResults: TestResultsService) {}
 
   ngOnInit(): void {
-    this.loadSavedRuns();
     this.loadResultRuns();
-    this.loadCurrentRun();
   }
 
   loadCurrentRun(): void {
     this.loading.set(true);
     this.error.set(null);
-
-    // Try backend cached latest (from Jenkins/S3)
-    this.testResults.getLatestCachedJson().subscribe({
-      next: cached => {
-        const results = Array.isArray(cached) ? cached : [];
-        if (results.length) {
-          this.currentSummary = this.computeSummary(results, 'Latest cached run');
-          this.loading.set(false);
-          return;
-        }
-        this.loading.set(false);
-        this.error.set('No cached test.json available. Select a run to load its test.json.');
-      },
-      error: () => {
-        this.loading.set(false);
-        this.error.set('No cached test.json available. Select a run to load its test.json.');
-      }
-    });
-  }
-
-  loadSavedRuns(): void {
-    this.testResults.getRunSummaries().subscribe({
-      next: runs => {
-        this.savedRuns = runs || [];
-      },
-      error: err => {
-        console.warn('Failed to load saved runs', err);
-      }
-    });
+    this.loadResultRuns();
   }
 
   loadResultRuns(): void {
+    const selectedRunId = this.selectedRunId;
     this.testResults.getResultRuns().subscribe({
       next: runs => {
         this.resultRuns = runs || [];
-        if (!this.selectedRunId && this.resultRuns.length) {
-          this.selectRun(this.resultRuns[0]);
+        this.resultRunsById = new Map(this.resultRuns.map(run => [run.id, run]));
+        this.loading.set(false);
+
+        if (!this.resultRuns.length) {
+          this.selectedRunId = null;
+          this.selectedResultUrl = null;
+          this.currentSummary = { name: 'No runs available', passed: 0, failed: 0, skipped: 0, total: 0 };
+          this.error.set('No cached result runs available yet.');
+          return;
         }
+
+        const selected =
+          (selectedRunId ? this.resultRunsById.get(selectedRunId) : undefined) || this.resultRuns[0];
+        this.selectRun(selected);
       },
       error: err => {
+        this.loading.set(false);
+        this.resultRuns = [];
+        this.resultRunsById.clear();
+        this.selectedRunId = null;
+        this.selectedResultUrl = null;
+        this.currentSummary = { name: 'Run', passed: 0, failed: 0, skipped: 0, total: 0 };
+        this.error.set(err?.error?.message || 'Unable to load cached result runs.');
         console.warn('Failed to load result runs', err);
       }
     });
-  }
-
-  saveCurrentRun(): void {
-    if (!this.currentSummary) return;
-    this.saving.set(true);
-    this.saveMessage.set(null);
-    this.testResults
-      .saveRunSummary({
-        name: this.currentSummary.name,
-        passed: this.currentSummary.passed,
-        failed: this.currentSummary.failed,
-        skipped: this.currentSummary.skipped,
-        total: this.currentSummary.total
-      })
-      .subscribe({
-        next: saved => {
-          this.saving.set(false);
-          this.saveMessage.set('Run saved.');
-          this.savedRuns = [saved, ...this.savedRuns].slice(0, 20);
-        },
-        error: err => {
-          this.saving.set(false);
-          this.saveMessage.set(err?.error?.message || 'Failed to save run.');
-        }
-      });
   }
 
   computeSummary(results: TestResult[], nameOverride?: string): RunSummary {
@@ -139,7 +102,7 @@ export class TestResultsComponent implements OnInit {
     const passEnd = passPct;
     const failEnd = passPct + failPct;
     return `conic-gradient(
-      #198754 0% ${passEnd}%,
+      var(--results-pass) 0% ${passEnd}%,
       #dc3545 ${passEnd}% ${failEnd}%,
       #adb5bd ${failEnd}% 100%
     )`;
@@ -152,36 +115,47 @@ export class TestResultsComponent implements OnInit {
   }
 
   selectRun(run: ResultRun): void {
+    if (!run) return;
+
+    const selectionVersion = ++this.selectionVersion;
     this.selectedRunId = run?.id ?? null;
     this.selectedResultUrl = null;
     this.resolveResultUrl(run);
-    if (run && (run.total || run.passed || run.failed || run.skipped) && (!run.data || !run.data.length)) {
-      this.currentSummary = {
-        name: run.name,
-        passed: run.passed || 0,
-        failed: run.failed || 0,
-        skipped: run.skipped || 0,
-        total: run.total || 0
-      };
+
+    if (run.data?.length) {
+      this.runLoading.set(false);
+      this.currentSummary = this.computeSummary(run.data, run.name);
       this.error.set(null);
       return;
     }
-    if (run?.data && run.data.length) {
-      this.currentSummary = this.computeSummary(run.data, run.name);
+
+    const immediateSummary = this.buildSummaryFromRun(run);
+    if (immediateSummary) {
+      this.currentSummary = immediateSummary;
+    } else {
+      this.currentSummary = { name: run.name || 'Run', passed: 0, failed: 0, skipped: 0, total: 0 };
+    }
+
+    if (this.hasStrongCachedSummary(run)) {
+      this.runLoading.set(false);
+      this.error.set(null);
       return;
     }
+
     const key = this.deriveTestKey(run);
     if (!key) {
+      this.runLoading.set(false);
       const msg = 'Unable to find test.json for this run.';
       this.error.set(msg);
-      this.currentSummary = { name: run?.name || 'Run', passed: 0, failed: 0, skipped: 0, total: 0 };
       return;
     }
-    this.fetchRunData(run, key);
+
+    this.fetchRunData(run, key, selectionVersion);
   }
 
-  onRunChange(runId: string): void {
-    const found = this.resultRuns.find(r => r.id === runId);
+  onRunChange(event: Event): void {
+    const runId = (event.target as HTMLSelectElement | null)?.value || '';
+    const found = this.resultRunsById.get(runId);
     if (found) {
       this.selectRun(found);
     }
@@ -189,6 +163,39 @@ export class TestResultsComponent implements OnInit {
 
   private applySummary(results: TestResult[], name?: string): void {
     this.currentSummary = this.computeSummary(results, name);
+  }
+
+  private buildSummaryFromRun(run: ResultRun | null | undefined): RunSummary | null {
+    if (!run) return null;
+
+    const hasAnySummaryValue = [run.total, run.passed, run.failed, run.skipped].some(value => value !== null && value !== undefined);
+    if (!hasAnySummaryValue) {
+      return null;
+    }
+
+    const passed = run.passed ?? 0;
+    const failed = run.failed ?? 0;
+    const skipped = run.skipped ?? 0;
+    const total = run.total ?? passed + failed + skipped;
+
+    return {
+      name: run.name || 'Run',
+      passed,
+      failed,
+      skipped,
+      total
+    };
+  }
+
+  private hasStrongCachedSummary(run: ResultRun | null | undefined): boolean {
+    const summary = this.buildSummaryFromRun(run);
+    if (!summary) return false;
+    return summary.total > 0 || summary.passed > 0 || summary.failed > 0 || summary.skipped > 0;
+  }
+
+  private updateRunCache(updatedRun: ResultRun): void {
+    this.resultRunsById.set(updatedRun.id, updatedRun);
+    this.resultRuns = this.resultRuns.map(run => (run.id === updatedRun.id ? updatedRun : run));
   }
 
   private deriveTestKey(run: ResultRun | null | undefined): string | null {
@@ -234,6 +241,10 @@ export class TestResultsComponent implements OnInit {
       this.selectedResultUrl = `/api/results/result-html?key=${encodeURIComponent(run.key)}`;
       return;
     }
+    if (run?.resultUrl) {
+      this.selectedResultUrl = run.resultUrl;
+      return;
+    }
     const resultKey = this.deriveResultHtmlKey(run);
     if (!resultKey) {
       this.selectedResultUrl = run?.resultUrl || null;
@@ -249,7 +260,7 @@ export class TestResultsComponent implements OnInit {
     });
   }
 
-  private fetchRunData(run: ResultRun, key: string): void {
+  private fetchRunData(run: ResultRun, key: string, selectionVersion: number): void {
     this.runLoading.set(true);
     this.error.set(null);
     this.testResults.loadRunData(key).subscribe({
@@ -265,7 +276,13 @@ export class TestResultsComponent implements OnInit {
           skipped: resp?.summary?.skipped ?? run.skipped,
           total: resp?.summary?.total ?? run.total
         };
-        this.resultRuns = this.resultRuns.map(r => (r.id === run.id ? updatedRun : r));
+        this.updateRunCache(updatedRun);
+
+        const isCurrentSelection = selectionVersion === this.selectionVersion && this.selectedRunId === run.id;
+        if (!isCurrentSelection) {
+          return;
+        }
+
         this.selectedResultUrl =
           updatedRun?.hasResultHtml && updatedRun?.key
             ? `/api/results/result-html?key=${encodeURIComponent(updatedRun.key)}`
@@ -284,6 +301,11 @@ export class TestResultsComponent implements OnInit {
         this.runLoading.set(false);
       },
       error: err => {
+        const isCurrentSelection = selectionVersion === this.selectionVersion && this.selectedRunId === run.id;
+        if (!isCurrentSelection) {
+          return;
+        }
+
         const msg = err?.error?.message || 'Unable to load test.json for this run.';
         this.runLoading.set(false);
         if (run && (run.total || run.passed || run.failed || run.skipped)) {

@@ -1,9 +1,95 @@
-<section class="py-5">
+<section class="execute-test-page py-4 py-lg-5">
   <div class="container">
-    <div class="card shadow-sm mb-4">
+    <div class="execute-test-hero shadow-sm mb-4">
+      <div>
+        <p class="execute-test-hero__eyebrow mb-2">Execute test</p>
+        <h1 class="execute-test-hero__title mb-2">Trigger automation from one control board</h1>
+        <p class="execute-test-hero__copy mb-3">
+          Launch suite-based coverage, queue feature-file runs on demand, and monitor the latest execution signals from one operations surface.
+        </p>
+
+        <div class="execute-test-hero__pills">
+          <span class="execute-test-pill">
+            <i class="bi bi-globe2 me-1"></i>
+            Suite env: {{ selectedEnv }}
+          </span>
+          <span class="execute-test-pill">
+            <i class="bi bi-kanban me-1"></i>
+            On-demand env: {{ onDemandSelectedEnv }}
+          </span>
+          <span class="execute-test-pill">
+            <i class="bi bi-git me-1"></i>
+            Default branch: {{ defaultAutomationBranch }}
+          </span>
+        </div>
+      </div>
+
+      <div class="execute-test-hero__aside">
+        <div class="execute-test-hero__stats">
+          <article class="execute-test-stat-card">
+            <div class="execute-test-stat-card__label">Active / queued</div>
+            <div class="execute-test-stat-card__value">{{ activeRuns }}</div>
+            <div class="execute-test-stat-card__detail">Runs still waiting on queue or Jenkins completion.</div>
+          </article>
+          <article class="execute-test-stat-card">
+            <div class="execute-test-stat-card__label">Completed</div>
+            <div class="execute-test-stat-card__value">{{ completedRuns }}</div>
+            <div class="execute-test-stat-card__detail">Executions that finished successfully and closed cleanly.</div>
+          </article>
+          <article class="execute-test-stat-card">
+            <div class="execute-test-stat-card__label">Needs attention</div>
+            <div class="execute-test-stat-card__value">{{ failedRuns }}</div>
+            <div class="execute-test-stat-card__detail">Runs that failed, were cancelled, or need follow-up.</div>
+          </article>
+        </div>
+      </div>
+    </div>
+
+    <div class="card shadow-sm execute-test-toolbar mb-4">
       <div class="card-body">
-        <p class="text-uppercase text-success fw-semibold mb-1">Execute</p>
-        <h2 class="h4 mb-3">Trigger Jenkins Suite</h2>
+        <div class="execute-test-filter-grid">
+          <div class="d-flex align-items-end gap-2 flex-wrap">
+            <button class="btn btn-success" type="button" (click)="refreshBoard()">
+              <i class="bi bi-arrow-repeat me-1"></i>
+              Refresh board
+            </button>
+            <a class="btn btn-outline-secondary" routerLink="/results">Results dashboard</a>
+          </div>
+        </div>
+
+        <div *ngIf="jenkinsStatus" class="alert alert-info mt-3 mb-0">{{ jenkinsStatus }}</div>
+      </div>
+    </div>
+
+    <div class="execute-test-summary-grid mb-4">
+      <article class="execute-test-summary-card execute-test-summary-card--suite shadow-sm">
+        <div class="execute-test-summary-card__label">Tag-based suites</div>
+        <div class="execute-test-summary-card__value">{{ suiteRunCount }}</div>
+        <div class="execute-test-summary-card__detail">Tracked suite executions launched from the standard Jenkins lane.</div>
+      </article>
+      <article class="execute-test-summary-card execute-test-summary-card--demand shadow-sm">
+        <div class="execute-test-summary-card__label">On-demand runs</div>
+        <div class="execute-test-summary-card__value">{{ onDemandRunCount }}</div>
+        <div class="execute-test-summary-card__detail">Feature-file executions queued from curated test-case selections.</div>
+      </article>
+      <article class="execute-test-summary-card execute-test-summary-card--ready shadow-sm">
+        <div class="execute-test-summary-card__label">Current selections</div>
+        <div class="execute-test-summary-card__value">{{ onDemandSelectionCount() }}</div>
+        <div class="execute-test-summary-card__detail">Unique feature files currently prepared in the on-demand builder.</div>
+      </article>
+    </div>
+
+    <div class="card shadow-sm execute-test-panel mb-4">
+      <div class="card-body">
+        <div class="d-flex flex-column flex-md-row align-items-md-start justify-content-between gap-3 mb-4">
+          <div>
+            <p class="execute-test-panel__eyebrow mb-1">Lane 01</p>
+            <h2 class="execute-test-panel__title mb-1">Trigger Jenkins suite</h2>
+            <div class="execute-test-panel__copy">Launch a tag-driven suite across the selected environment, browser, and device type.</div>
+          </div>
+          <span class="badge rounded-pill text-bg-light">Tag-based execution</span>
+        </div>
+
         <div class="row g-3 mb-3">
           <div class="col-md-6 col-lg-4">
             <label class="form-label small text-uppercase text-muted">Environment</label>
@@ -25,7 +111,7 @@
           </div>
           <div class="col-md-6 col-lg-4">
             <label class="form-label small text-uppercase text-muted">Device Type</label>
-            <div class="d-flex flex-wrap gap-3">
+            <div class="execute-test-choice-group">
               <div class="form-check" *ngFor="let dt of deviceTypes">
                 <input
                   class="form-check-input"
@@ -60,15 +146,23 @@
             <i class="bi" [ngClass]="jenkinsBusy ? 'bi-hourglass-split' : 'bi-play-fill'"></i>
             {{ jenkinsBusy ? 'Triggering…' : 'Run job' }}
           </button>
-          <span *ngIf="suiteTriggerStatus" class="text-info">{{ suiteTriggerStatus }}</span>
         </div>
+
+        <div *ngIf="suiteTriggerStatus" class="alert alert-info mt-3 mb-0">{{ suiteTriggerStatus }}</div>
       </div>
     </div>
 
-    <div class="card shadow-sm mb-4">
+    <div class="card shadow-sm execute-test-panel mb-4">
       <div class="card-body">
-        <p class="text-uppercase text-success fw-semibold mb-1">Execute</p>
-        <h2 class="h4 mb-3">Execute Test Cases On Demand</h2>
+        <div class="d-flex flex-column flex-md-row align-items-md-start justify-content-between gap-3 mb-4">
+          <div>
+            <p class="execute-test-panel__eyebrow mb-1">Lane 02</p>
+            <h2 class="execute-test-panel__title mb-1">Execute test cases on demand</h2>
+            <div class="execute-test-panel__copy">Assemble exact feature-file paths, point them at the correct automation branch, and queue the run without leaving the board.</div>
+          </div>
+          <span class="badge rounded-pill text-bg-light">{{ onDemandSelectionCount() }} selected</span>
+        </div>
+
         <div class="row g-3 mb-3">
           <div class="col-md-6 col-lg-3">
             <label class="form-label small text-uppercase text-muted">Environment</label>
@@ -84,7 +178,7 @@
           </div>
           <div class="col-md-6 col-lg-3">
             <label class="form-label small text-uppercase text-muted">Device Type</label>
-            <div class="d-flex flex-wrap gap-3">
+            <div class="execute-test-choice-group">
               <div class="form-check" *ngFor="let dt of deviceTypes">
                 <input
                   class="form-check-input"
@@ -128,7 +222,7 @@
             </button>
           </div>
 
-          <div class="border rounded p-3 mb-3" *ngFor="let testCase of onDemandTestCases; let i = index">
+          <div class="execute-test-testcase-row mb-3" *ngFor="let testCase of onDemandTestCases; let i = index">
             <div class="row g-3 align-items-end">
               <div class="col-md-6 col-lg-3">
                 <label class="form-label small text-uppercase text-muted">App Folder</label>
@@ -177,100 +271,139 @@
             <i class="bi" [ngClass]="onDemandBusy ? 'bi-hourglass-split' : 'bi-play-fill'"></i>
             {{ onDemandBusy ? 'Triggering…' : 'Run selected test cases' }}
           </button>
-          <span *ngIf="onDemandTriggerStatus" class="text-info">{{ onDemandTriggerStatus }}</span>
         </div>
+
+        <div *ngIf="onDemandTriggerStatus" class="alert alert-info mt-3 mb-0">{{ onDemandTriggerStatus }}</div>
       </div>
     </div>
 
-    <div class="mb-3">
-      <div class="d-flex align-items-center justify-content-between gap-2 mb-3 flex-wrap">
-        <h3 class="h5 mb-0">Recent/active runs</h3>
-        <span *ngIf="jenkinsStatus" class="small text-muted">{{ jenkinsStatus }}</span>
-      </div>
-      <div class="row g-3" *ngIf="recentRuns.length; else noRuns">
-        <div class="col-md-6 col-xl-4" *ngFor="let run of recentRuns">
-          <div class="card h-100 shadow-sm">
-            <div class="card-body d-flex flex-column gap-2">
-              <div class="d-flex justify-content-between align-items-start gap-2">
-                <div>
-                  <div class="fw-semibold">Run #{{ run.id }}</div>
-                  <div class="small text-muted">{{ run.date }} {{ run.when }} · {{ run.who }}</div>
+    <div class="card shadow-sm execute-test-panel">
+      <div class="card-body">
+        <div class="d-flex flex-column flex-md-row align-items-md-start justify-content-between gap-3 mb-4">
+          <div>
+            <p class="execute-test-panel__eyebrow mb-1">Run history</p>
+            <h2 class="execute-test-panel__title mb-1">Recent and active runs</h2>
+            <div class="execute-test-panel__copy">Monitor queue state, build routing, resolved feature paths, and report links from one live board.</div>
+          </div>
+          <span class="badge rounded-pill text-bg-light">{{ totalTrackedRuns }} tracked</span>
+        </div>
+
+        <div class="execute-test-runs" *ngIf="recentRuns.length; else noRuns">
+          <article class="execute-test-run-card" *ngFor="let run of recentRuns">
+            <button
+              class="execute-test-run-card__toggle p-0 w-100 text-start"
+              type="button"
+              (click)="toggleRunDetails(run)"
+              [attr.aria-expanded]="isRunExpanded(run)"
+              [attr.aria-controls]="'run-details-' + run.id">
+              <div class="execute-test-run-card__topline">
+                <div class="execute-test-run-card__header">
+                  <div class="execute-test-run-card__lane">{{ runTypeLabel(run) }}</div>
+                  <div class="execute-test-run-card__title">Run #{{ run.id }}</div>
+                  <div class="execute-test-run-card__meta">{{ run.date }} {{ run.when }} · {{ run.who }}</div>
                 </div>
-                <div class="d-flex align-items-center gap-2">
-                  <span class="badge" [ngClass]="{
-                    'text-bg-warning': run.status === 'pending' || run.status === 'queued',
-                    'text-bg-info': run.status === 'inprogress' || run.status === 'running',
-                    'text-bg-success': run.status === 'completed',
-                    'text-bg-danger': run.status === 'failure' || run.status === 'failed',
-                    'text-bg-secondary': run.status !== 'pending' && run.status !== 'queued' && run.status !== 'inprogress' && run.status !== 'running' && run.status !== 'completed' && run.status !== 'failure' && run.status !== 'failed'
-                  }">{{ run.status }}</span>
-                  <button
-                    class="btn btn-outline-secondary btn-sm"
-                    type="button"
-                    (click)="toggleRunDetails(run)"
-                    [attr.aria-expanded]="isRunExpanded(run)"
-                    [attr.aria-controls]="'run-details-' + run.id"
-                    aria-label="Toggle run details">
-                    <i class="bi" [ngClass]="isRunExpanded(run) ? 'bi-chevron-up' : 'bi-chevron-down'"></i>
-                  </button>
+                <div class="execute-test-run-card__status text-end">
+                  <span class="badge rounded-pill d-block mb-2" [ngClass]="runStatusBadgeClass(run.status)">{{ run.status }}</span>
+                  <i class="bi" [ngClass]="isRunExpanded(run) ? 'bi-chevron-up' : 'bi-chevron-down'"></i>
                 </div>
               </div>
+            </button>
 
-              <div class="small">
-                <strong>Selection:</strong> {{ run.displayLabel || run.feature }}
+            <div class="execute-test-run-card__stack">
+              <div class="execute-test-run-card__chips">
+                <span class="execute-test-chip execute-test-chip--selection">
+                  <i class="bi bi-diagram-3 me-1"></i>
+                  {{ run.displayLabel || run.feature }}
+                </span>
+                <span class="execute-test-chip execute-test-chip--neutral">
+                  <i class="bi bi-globe2 me-1"></i>
+                  {{ run.env }}
+                </span>
+                <span class="execute-test-chip execute-test-chip--neutral" *ngIf="run.browser">
+                  <i class="bi bi-window me-1"></i>
+                  {{ run.browser }}
+                </span>
+                <span class="execute-test-chip execute-test-chip--neutral" *ngIf="run.deviceType">
+                  <i class="bi bi-phone me-1"></i>
+                  {{ run.deviceType }}
+                </span>
               </div>
 
-              <div class="d-flex flex-column gap-2" *ngIf="isRunExpanded(run)" [attr.id]="'run-details-' + run.id">
-                <div class="small"><strong>Execution:</strong> {{ runTypeLabel(run) }}</div>
-                <div class="small"><strong>Env:</strong> {{ run.env }}</div>
-                <div class="small" *ngIf="run.branch"><strong>Branch:</strong> {{ run.branch }}</div>
-                <div class="small" *ngIf="run.browser"><strong>Browser:</strong> {{ run.browser }}</div>
-                <div class="small" *ngIf="run.deviceType"><strong>Device:</strong> {{ run.deviceType }}</div>
-                <div class="small" *ngIf="run.featureFiles?.length">
-                  <strong>Resolved Paths:</strong> {{ run.featureFiles?.length }}
+              <div class="execute-test-run-card__details" *ngIf="isRunExpanded(run)" [attr.id]="'run-details-' + run.id">
+                <div class="execute-test-detail-row">
+                  <span>Execution</span>
+                  <strong>{{ runTypeLabel(run) }}</strong>
+                </div>
+                <div class="execute-test-detail-row" *ngIf="run.branch">
+                  <span>Branch</span>
+                  <strong>{{ run.branch }}</strong>
+                </div>
+                <div class="execute-test-detail-row">
+                  <span>Selection</span>
+                  <strong>{{ run.displayLabel || run.feature }}</strong>
+                </div>
+                <div class="execute-test-detail-row" *ngIf="run.featureFiles?.length">
+                  <span>Resolved Paths</span>
+                  <strong>{{ run.featureFiles?.length }} file{{ run.featureFiles?.length === 1 ? '' : 's' }}</strong>
                 </div>
                 <ul class="small mb-0 ps-3" *ngIf="run.featureFiles?.length">
                   <li *ngFor="let featureFile of run.featureFiles">{{ featureFile }}</li>
                 </ul>
-                <div class="small" *ngIf="run.queueUrl">
-                  <strong>Queue:</strong>
-                  <a [href]="run.queueUrl" target="_blank" rel="noreferrer">{{ run.queueUrl }}</a>
+                <div class="execute-test-detail-row" *ngIf="run.queueUrl">
+                  <span>Queue</span>
+                  <strong><a [href]="run.queueUrl" target="_blank" rel="noreferrer">{{ run.queueUrl }}</a></strong>
                 </div>
-                <div class="small" *ngIf="run.buildNumber">
-                  <strong>Build #:</strong> {{ run.buildNumber }}
+                <div class="execute-test-detail-row" *ngIf="run.buildNumber">
+                  <span>Build #</span>
+                  <strong>{{ run.buildNumber }}</strong>
                 </div>
-                <div class="small" *ngIf="run.testJsonUrl">
-                  <strong>test.json:</strong>
-                  <a [href]="run.testJsonUrl" target="_blank" rel="noreferrer">download</a>
+                <div class="execute-test-detail-row" *ngIf="run.resultUrl">
+                  <span>Report</span>
+                  <strong><a [href]="run.resultUrl" target="_blank" rel="noreferrer">view</a></strong>
                 </div>
-                <div class="small" *ngIf="run.resultUrl">
-                  <strong>Report:</strong>
-                  <a [href]="run.resultUrl" target="_blank" rel="noreferrer">view</a>
+                <div class="execute-test-detail-row">
+                  <span>JIRA</span>
+                  <strong>{{ run.jira || '—' }}</strong>
                 </div>
-                <div class="d-flex align-items-center gap-2">
-                  <button
-                    class="btn btn-outline-danger btn-sm"
-                    type="button"
-                    [disabled]="run.status === 'completed' || run.status === 'failure' || run.status === 'failed' || run.status === 'cancelled'"
-                    (click)="cancelRun(run)">
-                    Cancel
-                  </button>
-                  <div class="small text-muted" *ngIf="run.note">“{{ run.note }}”</div>
-                </div>
-                <div class="small">
-                  <strong>JIRA:</strong> {{ run.jira || '—' }}
-                </div>
-                <div class="small text-muted">
-                  <strong>Comment:</strong> {{ run.comment || '—' }}
+                <div class="execute-test-detail-row">
+                  <span>Comment</span>
+                  <strong>{{ run.comment || '—' }}</strong>
                 </div>
               </div>
             </div>
-          </div>
+
+            <div class="execute-test-run-card__footer">
+              <div class="execute-test-run-card__footer-actions d-flex align-items-center gap-2 flex-wrap">
+                <a class="btn btn-outline-success btn-sm" *ngIf="run.resultUrl" [href]="run.resultUrl" target="_blank" rel="noreferrer">
+                  View report
+                </a>
+              </div>
+              <div class="execute-test-run-card__footer-meta d-flex align-items-center gap-2 flex-wrap">
+                <button
+                  class="btn btn-outline-danger btn-sm"
+                  type="button"
+                  [disabled]="run.status === 'completed' || run.status === 'failure' || run.status === 'failed' || run.status === 'cancelled'"
+                  (click)="cancelRun(run)">
+                  Cancel
+                </button>
+                <span class="execute-test-run-card__footer-note" *ngIf="run.note">{{ run.note }}</span>
+              </div>
+            </div>
+          </article>
         </div>
+
+        <ng-template #noRuns>
+          <div class="execute-test-empty">
+            <div class="execute-test-empty__icon">
+              <i class="bi bi-terminal-dash"></i>
+            </div>
+            <div class="execute-test-empty__title">No runs yet</div>
+            <div class="execute-test-empty__copy">
+              Trigger a suite or queue an on-demand feature-file run to start building out the execution board.
+            </div>
+          </div>
+        </ng-template>
       </div>
-      <ng-template #noRuns>
-        <div class="alert alert-secondary">No runs yet. Trigger a job to see it here.</div>
-      </ng-template>
     </div>
   </div>
 </section>

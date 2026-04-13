@@ -1,4 +1,4 @@
-<section class="py-5" *ngIf="roles.canManageFulfillment(); else unauthorized">
+<section class="release-board-page py-4 py-lg-5" *ngIf="roles.canManageFulfillment(); else unauthorized">
   <div class="container">
     <div class="app-back-button-row mb-3">
       <button type="button" class="btn btn-success btn-sm" (click)="goBack()">
@@ -6,17 +6,82 @@
         Back
       </button>
     </div>
-    <div class="mb-3">
+
+    <div class="release-board-hero shadow-sm mb-4">
       <div>
-        <p class="text-uppercase text-success fw-semibold mb-1">Release board</p>
-        <h1 class="h4 mb-0">Releases update automatically from Execute Test</h1>
-        <small class="text-muted">Release Ticket · QA · Selection · Env · Results</small>
+        <p class="release-board-hero__eyebrow mb-2">Release board</p>
+        <h1 class="release-board-hero__title mb-2">Releases update automatically from Execute Test</h1>
+        <p class="release-board-hero__copy mb-3">
+          Track release ticket, QA owner, environment, execution type, and result visibility from the shared release board timeline.
+        </p>
+
+        <div class="release-board-hero__pills">
+          <span class="release-board-pill">
+            <i class="bi bi-collection me-1"></i>
+            {{ totalReleases }} release{{ totalReleases === 1 ? '' : 's' }}
+          </span>
+          <span class="release-board-pill" *ngIf="latestRelease">
+            <i class="bi bi-broadcast me-1"></i>
+            Latest: #{{ latestRelease.id }}
+          </span>
+          <span class="release-board-pill">
+            <i class="bi bi-speedometer2 me-1"></i>
+            {{ releasesWithResults }} with results linked
+          </span>
+        </div>
+      </div>
+
+      <div class="release-board-hero__aside">
+        <div class="release-board-hero__stats">
+          <article class="release-board-stat-card">
+            <div class="release-board-stat-card__label">Linked results</div>
+            <div class="release-board-stat-card__value">{{ releasesWithResults }}</div>
+            <div class="release-board-stat-card__detail">Entries that already expose a results dashboard link.</div>
+          </article>
+          <article class="release-board-stat-card">
+            <div class="release-board-stat-card__label">Production</div>
+            <div class="release-board-stat-card__value">{{ productionReleases }}</div>
+            <div class="release-board-stat-card__detail">Releases targeted at the live environment lane.</div>
+          </article>
+          <article class="release-board-stat-card">
+            <div class="release-board-stat-card__label">On-demand</div>
+            <div class="release-board-stat-card__value">{{ onDemandReleases }}</div>
+            <div class="release-board-stat-card__detail">Release entries created from feature-file runs.</div>
+          </article>
+        </div>
       </div>
     </div>
 
-    <div class="card shadow-sm">
+    <div class="release-board-summary-grid mb-4">
+      <article class="release-board-summary-card release-board-summary-card--results shadow-sm">
+        <div class="release-board-summary-card__label">Results connected</div>
+        <div class="release-board-summary-card__value">{{ releasesWithResults }}</div>
+        <div class="release-board-summary-card__detail">Release entries already tied to a test-results report.</div>
+      </article>
+      <article class="release-board-summary-card release-board-summary-card--production shadow-sm">
+        <div class="release-board-summary-card__label">Production releases</div>
+        <div class="release-board-summary-card__value">{{ productionReleases }}</div>
+        <div class="release-board-summary-card__detail">Items currently associated with production execution.</div>
+      </article>
+      <article class="release-board-summary-card release-board-summary-card--ondemand shadow-sm">
+        <div class="release-board-summary-card__label">On-demand runs</div>
+        <div class="release-board-summary-card__value">{{ onDemandReleases }}</div>
+        <div class="release-board-summary-card__detail">Releases created from manual feature-file targeting.</div>
+      </article>
+    </div>
+
+    <div class="card shadow-sm release-board-panel">
       <div class="card-body table-responsive">
-        <table class="table table-bordered align-middle">
+        <div class="d-flex flex-column flex-md-row align-items-md-start justify-content-between gap-3 mb-4">
+          <div>
+            <p class="release-board-panel__eyebrow mb-1">Release queue</p>
+            <h2 class="release-board-panel__title mb-1">Release timeline</h2>
+            <div class="release-board-panel__copy">Release ticket, QA, selection, environment, results, Jira, and notes in one operational table.</div>
+          </div>
+          <span class="badge rounded-pill text-bg-light">{{ totalReleases }} entries</span>
+        </div>
+
+        <table class="table table-bordered table-hover align-middle release-board-table">
           <thead>
             <tr>
               <th>Release Ticket</th>
@@ -32,14 +97,19 @@
             <tr *ngIf="!releases().length">
               <td colspan="8" class="text-center text-muted py-4">No releases yet.</td>
             </tr>
-            <tr *ngFor="let order of releases(); let i = index" [ngClass]="{ 'table-success': i % 2 === 0 }">
+            <tr *ngFor="let order of releases()" class="release-board-table__row">
               <td>#{{ order.id }}</td>
               <td>{{ order.qa || '—' }}</td>
-              <td>{{ order.feature || '—' }}</td>
+              <td>
+                <div>{{ order.feature || '—' }}</div>
+                <div class="mt-1">
+                  <span class="release-board-chip">{{ runTypeLabel(order) }}</span>
+                </div>
+              </td>
               <td>{{ order.environment || '—' }}</td>
               <td style="min-width: 140px; white-space: nowrap;">
                 <ng-container *ngIf="order.resultUrl; else noResult">
-                  <a [href]="order.resultUrl" target="_blank" rel="noreferrer" class="link-primary">test-results</a>
+                  <a [href]="order.resultUrl" target="_blank" rel="noreferrer" class="release-board-link">test-results</a>
                 </ng-container>
                 <ng-template #noResult>—</ng-template>
               </td>
@@ -56,7 +126,7 @@
 </section>
 
 <ng-template #unauthorized>
-  <section class="py-5">
+  <section class="release-board-page py-4 py-lg-5">
     <div class="container">
       <div class="app-back-button-row mb-3">
         <button type="button" class="btn btn-success btn-sm" (click)="goBack()">
@@ -64,7 +134,7 @@
           Back
         </button>
       </div>
-      <div class="alert alert-warning mb-0">You do not have access to the release board.</div>
+      <div class="release-board-unauthorized">You do not have access to the release board.</div>
     </div>
   </section>
 </ng-template>

@@ -24,6 +24,8 @@ import { TestResultsComponent } from './test-results.component';
 import { TeamWeeklyTaskComponent } from './team-weekly-task.component';
 import { TestCasesHubComponent } from './test-cases-hub.component';
 import { AutomationWeeklyStatusPageComponent } from './automation-weekly-status-page.component';
+import { AutomationKpiPageComponent } from './automation-kpi-page.component';
+import { MobileAppBoardComponent } from './mobile-app-board.component';
 
 export const appRoutes: Routes = [
   { path: '', component: HomeComponent },
@@ -35,15 +37,17 @@ export const appRoutes: Routes = [
   { path: 'test-history', component: TestHistoryComponent },
   { path: 'order', redirectTo: 'test-history' },
   { path: 'executetest', component: ExecuteTestComponent },
+  { path: 'mobile-app-board', component: MobileAppBoardComponent },
   { path: 'cart', redirectTo: 'executetest' },
   { path: 'order-confirmation/:id', component: OrderConfirmationComponent },
   { path: 'track/:id', component: OrderTrackingComponent },
   { path: 'fulfillment', component: FulfillmentComponent },
   { path: 'releaseboard', component: OrderFulfillmentBoardComponent },
   { path: 'automation-weekly-status', component: AutomationWeeklyStatusPageComponent },
+  { path: 'automation-kpi', component: AutomationKpiPageComponent },
   { path: 'team-weekly-task', component: TeamWeeklyTaskComponent },
   { path: 'test-cases-hub', component: TestCasesHubComponent },
-  { path: 'release-history', redirectTo: 'automation-weekly-status' },
+  { path: 'release-history', redirectTo: 'automation-kpi' },
   { path: 'order-history', redirectTo: 'automation-weekly-status' },
   { path: 'results', component: TestResultsComponent },
   { path: 'enquiries', component: EnquiryBoardComponent },

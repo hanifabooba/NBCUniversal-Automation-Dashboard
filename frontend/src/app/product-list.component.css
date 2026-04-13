@@ -1,0 +1,352 @@
+:host {
+  --env-health-green: #66BB6A;
+  --env-health-green-dark: #2F6C33;
+  --env-health-green-soft: #81C784;
+  --env-health-green-pale: #A5D6A7;
+  --env-health-green-wash: #E8F5E9;
+  --env-health-ink: #14283d;
+  --env-health-muted: #617386;
+}
+
+.environment-health-page {
+  background:
+    radial-gradient(circle at top right, rgba(49, 82, 119, 0.18), transparent 30%),
+    radial-gradient(circle at top left, rgba(102, 187, 106, 0.15), transparent 25%),
+    linear-gradient(180deg, #eef3f8 0%, #f8fbfd 32%, #ffffff 100%);
+  min-height: 100vh;
+}
+
+.environment-health-page .btn-success {
+  --bs-btn-color: #ffffff;
+  --bs-btn-bg: var(--env-health-green);
+  --bs-btn-border-color: var(--env-health-green);
+  --bs-btn-hover-color: #ffffff;
+  --bs-btn-hover-bg: var(--env-health-green-dark);
+  --bs-btn-hover-border-color: var(--env-health-green-dark);
+  --bs-btn-focus-shadow-rgb: 129, 199, 132;
+  --bs-btn-active-color: #ffffff;
+  --bs-btn-active-bg: var(--env-health-green-soft);
+  --bs-btn-active-border-color: var(--env-health-green-soft);
+}
+
+.environment-health-page .btn-outline-success {
+  --bs-btn-color: var(--env-health-green-dark);
+  --bs-btn-border-color: rgba(47, 108, 51, 0.22);
+  --bs-btn-hover-color: #ffffff;
+  --bs-btn-hover-bg: var(--env-health-green);
+  --bs-btn-hover-border-color: var(--env-health-green);
+}
+
+.environment-health-hero {
+  display: grid;
+  gap: 1.5rem;
+  border-radius: 28px;
+  padding: 1.85rem;
+  background:
+    linear-gradient(135deg, rgba(49, 82, 119, 0.96), rgba(85, 115, 146, 0.94)),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0));
+  color: #ffffff;
+}
+
+.environment-health-hero__eyebrow,
+.environment-health-panel__eyebrow {
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  font-size: 0.74rem;
+  opacity: 0.84;
+}
+
+.environment-health-hero__title {
+  font-size: clamp(2rem, 3.8vw, 3rem);
+  font-weight: 700;
+}
+
+.environment-health-hero__copy {
+  max-width: 42rem;
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.environment-health-hero__pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.environment-health-pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.52rem 0.9rem;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: rgba(255, 255, 255, 0.95);
+  font-size: 0.92rem;
+}
+
+.environment-health-hero__aside,
+.environment-health-hero__stats,
+.environment-health-summary-grid,
+.environment-health-runs {
+  display: grid;
+  gap: 1rem;
+}
+
+.environment-health-hero__stats {
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
+.environment-health-stat-card {
+  border-radius: 20px;
+  padding: 1rem 1.1rem;
+  background: rgba(10, 24, 38, 0.32);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(8px);
+}
+
+.environment-health-stat-card__label {
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 0.72rem;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.environment-health-stat-card__value {
+  margin-top: 0.35rem;
+  font-size: clamp(1.4rem, 2.2vw, 1.9rem);
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.environment-health-stat-card__detail {
+  margin-top: 0.25rem;
+  color: rgba(255, 255, 255, 0.76);
+  font-size: 0.9rem;
+}
+
+.environment-health-toolbar.card,
+.environment-health-panel,
+.environment-health-run-card,
+.environment-health-empty {
+  border: 1px solid rgba(20, 40, 61, 0.08);
+  border-radius: 24px;
+}
+
+.environment-health-toolbar .card-body,
+.environment-health-panel .card-body {
+  padding: 1.2rem;
+}
+
+.environment-health-filter-grid,
+.environment-health-summary-grid {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.environment-health-summary-card {
+  border-radius: 20px;
+  padding: 1rem 1.05rem;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(20, 40, 61, 0.08);
+}
+
+.environment-health-summary-card--pass {
+  background: linear-gradient(180deg, #ffffff 0%, rgba(232, 245, 233, 0.9) 100%);
+}
+
+.environment-health-summary-card--warn {
+  background: linear-gradient(180deg, #ffffff 0%, rgba(255, 243, 205, 0.95) 100%);
+}
+
+.environment-health-summary-card--fail {
+  background: linear-gradient(180deg, #ffffff 0%, rgba(248, 215, 218, 0.92) 100%);
+}
+
+.environment-health-summary-card__label {
+  color: var(--env-health-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 0.75rem;
+}
+
+.environment-health-summary-card__value {
+  color: var(--env-health-ink);
+  font-size: clamp(1.5rem, 2vw, 2.2rem);
+  font-weight: 700;
+  margin-top: 0.35rem;
+}
+
+.environment-health-summary-card__detail {
+  color: var(--env-health-muted);
+  font-size: 0.9rem;
+  margin-top: 0.2rem;
+}
+
+.environment-health-panel__title {
+  color: var(--env-health-ink);
+  font-size: 1.3rem;
+  font-weight: 700;
+}
+
+.environment-health-panel__copy {
+  color: var(--env-health-muted);
+  font-size: 0.95rem;
+}
+
+.environment-health-runs {
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.environment-health-run-card {
+  background: rgba(255, 255, 255, 0.96);
+  padding: 1rem;
+  box-shadow: 0 12px 24px rgba(49, 82, 119, 0.08);
+}
+
+.environment-health-run-card__toggle {
+  border: 0;
+  background: transparent;
+}
+
+.environment-health-run-card__topline {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 0.85rem;
+}
+
+.environment-health-run-card__site {
+  color: var(--env-health-green-dark);
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.environment-health-run-card__title {
+  color: var(--env-health-ink);
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.environment-health-run-card__meta,
+.environment-health-check__detail {
+  color: var(--env-health-muted);
+  font-size: 0.9rem;
+}
+
+.environment-health-run-card__stack {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.environment-health-run-card__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.environment-health-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.46rem 0.78rem;
+  background: rgba(232, 245, 233, 0.88);
+  color: var(--env-health-green-dark);
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
+.environment-health-chip--neutral {
+  background: rgba(49, 82, 119, 0.08);
+  color: var(--env-health-ink);
+}
+
+.environment-health-checks {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 0.25rem;
+}
+
+.environment-health-check {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.75rem;
+  padding: 0.8rem;
+  border-radius: 16px;
+  background: #f8fbfd;
+  border: 1px solid rgba(20, 40, 61, 0.06);
+}
+
+.environment-health-check__name {
+  color: var(--env-health-ink);
+  font-weight: 700;
+}
+
+.environment-health-run-card__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.environment-health-run-card__footer-id {
+  color: var(--env-health-muted);
+  font-size: 0.86rem;
+}
+
+.environment-health-empty {
+  padding: 2.2rem 1rem;
+  text-align: center;
+  background: linear-gradient(180deg, #ffffff 0%, rgba(232, 245, 233, 0.9) 100%);
+}
+
+.environment-health-empty__icon {
+  width: 62px;
+  height: 62px;
+  display: grid;
+  place-items: center;
+  margin: 0 auto 0.9rem;
+  border-radius: 50%;
+  background: rgba(102, 187, 106, 0.14);
+  color: var(--env-health-green-dark);
+  font-size: 1.55rem;
+}
+
+.environment-health-empty__title {
+  color: var(--env-health-ink);
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+
+.environment-health-empty__copy {
+  color: var(--env-health-muted);
+  max-width: 28rem;
+  margin: 0.35rem auto 1rem;
+}
+
+@media (min-width: 992px) {
+  .environment-health-hero {
+    grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.95fr);
+    align-items: center;
+  }
+}
+
+@media (max-width: 767px) {
+  .environment-health-hero,
+  .environment-health-toolbar.card,
+  .environment-health-panel,
+  .environment-health-run-card,
+  .environment-health-empty {
+    border-radius: 18px;
+  }
+
+  .environment-health-run-card__topline,
+  .environment-health-run-card__footer {
+    flex-direction: column;
+    align-items: start;
+  }
+
+  .environment-health-runs {
+    grid-template-columns: 1fr;
+  }
+}

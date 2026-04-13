@@ -1,7 +1,10 @@
 .weekly-status-page {
+  --weekly-status-pass-tint: rgba(var(--nbcuniversal-green-light-rgb), 0.58);
+  --weekly-status-pass-tint-strong: rgba(var(--nbcuniversal-green-pale-rgb), 0.78);
+  --weekly-status-row-divider: rgba(var(--nbcuniversal-green-dark-rgb), 0.1);
   background:
-    radial-gradient(circle at top left, rgba(17, 94, 89, 0.14), transparent 36%),
-    linear-gradient(180deg, #f5f7f6 0%, #ffffff 22%, #f4f7fb 100%);
+    radial-gradient(circle at top left, rgba(var(--nbcuniversal-green-rgb), 0.18), transparent 36%),
+    linear-gradient(180deg, var(--nbcuniversal-green-wash) 0%, #ffffff 22%, #f4f7fb 100%);
   min-height: 100vh;
 }
 
@@ -68,8 +71,8 @@
 }
 
 .summary-card--passed {
-  background: rgba(25, 135, 84, 0.12);
-  border-color: rgba(25, 135, 84, 0.24);
+  background: #E8F5E9;
+  border-color: rgba(102, 187, 106, 0.16);
 }
 
 .summary-card--failed {
@@ -102,7 +105,7 @@
 
 .summary-card--passed .summary-card__label,
 .summary-card--passed .summary-card__value {
-  color: #146c43;
+  color: #2F6C33;
 }
 
 .summary-card--failed .summary-card__label,
@@ -123,10 +126,39 @@
   z-index: 1;
 }
 
+.weekly-status-table {
+  --bs-table-bg: transparent;
+  border-color: var(--weekly-status-row-divider);
+}
+
 .weekly-status-table td,
 .weekly-status-table th {
   padding: 0.95rem 0.85rem;
   vertical-align: middle;
+}
+
+.weekly-status-table tbody tr {
+  transition: background-color 160ms ease, box-shadow 160ms ease;
+}
+
+.weekly-status-table__row:nth-child(odd) > * {
+  background: var(--weekly-status-pass-tint);
+}
+
+.weekly-status-table__row:nth-child(even) > * {
+  background: #ffffff;
+}
+
+.weekly-status-table__row > * {
+  border-bottom-color: var(--weekly-status-row-divider);
+}
+
+.weekly-status-table.table-hover > tbody > .weekly-status-table__row:hover > * {
+  background: var(--weekly-status-pass-tint-strong);
+}
+
+.weekly-status-table__empty > * {
+  background: #ffffff;
 }
 
 @media (min-width: 992px) {

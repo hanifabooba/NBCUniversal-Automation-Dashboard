@@ -1,14 +1,15 @@
 <section class="weekly-status-page py-4 py-lg-5">
   <div class="container">
+    <div class="app-back-button-row mb-3">
+      <button type="button" class="btn btn-success btn-sm" (click)="goBack()">
+        <i class="bi bi-arrow-left me-1"></i>
+        Back
+      </button>
+    </div>
+
     <div class="hero-card mb-4">
       <div class="hero-card__content">
         <div>
-          <div class="app-back-button-row mb-3">
-            <button type="button" class="btn btn-success btn-sm" (click)="goBack()">
-              <i class="bi bi-arrow-left me-1"></i>
-              Back
-            </button>
-          </div>
           <p class="hero-card__eyebrow mb-1">Automation weekly status</p>
           <h1 class="hero-card__title mb-2">Weekly automation board</h1>
           <p class="hero-card__copy mb-0">
@@ -122,10 +123,10 @@
               </tr>
             </thead>
             <tbody>
-              <tr *ngIf="!rows.length && !loading">
+              <tr *ngIf="!rows.length && !loading" class="weekly-status-table__empty">
                 <td colspan="14" class="text-center text-muted py-5">No rows matched the selected filters.</td>
               </tr>
-              <tr *ngFor="let row of rows; trackBy: trackByRow">
+              <tr *ngFor="let row of rows; trackBy: trackByRow" class="weekly-status-table__row">
                 <td>{{ row.sn }}</td>
                 <td>{{ row.platform }}</td>
                 <td>

@@ -27,10 +27,10 @@
       <div class="d-flex flex-wrap align-items-center gap-2">
         <label class="fw-semibold small text-uppercase text-muted mb-0">Select run</label>
         <select class="form-select form-select-sm" style="max-width: 320px"
-          [ngModel]="selectedRunId"
-          (ngModelChange)="onRunChange($event)"
+          [value]="selectedRunId || ''"
+          (change)="onRunChange($event)"
           [disabled]="!resultRuns.length">
-          <option *ngIf="!resultRuns.length" [value]="null">No runs available yet</option>
+          <option *ngIf="!resultRuns.length" value="">No runs available yet</option>
           <option *ngFor="let rr of resultRuns" [value]="rr.id">
             {{ rr.name }} · {{ rr.createdAt | date:'short' }}
           </option>

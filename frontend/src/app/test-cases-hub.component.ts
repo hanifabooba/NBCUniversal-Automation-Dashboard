@@ -13,7 +13,8 @@ interface TestCaseLink {
   standalone: true,
   selector: 'app-test-cases-hub',
   imports: [CommonModule],
-  templateUrl: './test-cases-hub.component.html'
+  templateUrl: './test-cases-hub.component.html',
+  styleUrls: ['./test-cases-hub.component.css']
 })
 export class TestCasesHubComponent {
   constructor(
@@ -35,6 +36,14 @@ export class TestCasesHubComponent {
       tag: 'SharePoint'
     }
   ];
+
+  get totalSources(): number {
+    return this.links.length;
+  }
+
+  get sourceTags(): string[] {
+    return Array.from(new Set(this.links.map(link => link.tag).filter((tag): tag is string => !!tag)));
+  }
 
   goBack(): void {
     if (typeof window !== 'undefined' && window.history.length > 1) {

@@ -1,6 +1,7 @@
 import { Component } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { RouterLink } from '@angular/router';
 import {
   JenkinsFeatureFilesTriggerRequest,
   JenkinsOnDemandTestCaseRequest,
@@ -48,8 +49,9 @@ interface ExecuteRun {
 @Component({
   standalone: true,
   selector: 'app-executetest',
-  imports: [CommonModule, FormsModule],
-  templateUrl: './executetest.component.html'
+  imports: [CommonModule, FormsModule, RouterLink],
+  templateUrl: './executetest.component.html',
+  styleUrls: ['./executetest.component.css']
 })
 export class ExecuteTestComponent {
   readonly defaultAutomationBranch = 'Centralized_Web_And_Mobile_Final_Enterprise';
@@ -163,6 +165,34 @@ export class ExecuteTestComponent {
     private releases: ReleaseService,
     private weeklyStatus: WeeklyStatusService
   ) {}
+
+  get totalTrackedRuns(): number {
+    return this.recentRuns.length;
+  }
+
+  get activeRuns(): number {
+    return this.recentRuns.filter(run => this.isActiveStatus(run?.status)).length;
+  }
+
+  get completedRuns(): number {
+    return this.recentRuns.filter(run => ['completed', 'success'].includes(String(run?.status || '').toLowerCase())).length;
+  }
+
+  get failedRuns(): number {
+    return this.recentRuns.filter(run => ['failure', 'failed', 'cancelled', 'aborted'].includes(String(run?.status || '').toLowerCase())).length;
+  }
+
+  get suiteRunCount(): number {
+    return this.recentRuns.filter(run => run.runType === 'tag').length;
+  }
+
+  get onDemandRunCount(): number {
+    return this.recentRuns.filter(run => run.runType === 'test-cases').length;
+  }
+
+  get latestRun(): ExecuteRun | null {
+    return this.recentRuns[0] ?? null;
+  }
 
   triggerJenkins(): void {
     this.suiteTriggerStatus = '';
@@ -319,6 +349,20 @@ export class ExecuteTestComponent {
 
   runTypeLabel(run: ExecuteRun): string {
     return run.runType === 'test-cases' ? 'Test cases on demand' : 'Tag-based suite';
+  }
+
+  runStatusBadgeClass(status: string | undefined): string {
+    const normalized = String(status || '').toLowerCase();
+    if (['pending', 'queued'].includes(normalized)) return 'text-bg-warning';
+    if (['inprogress', 'in-progress', 'running', 'triggered'].includes(normalized)) return 'text-bg-info';
+    if (['completed', 'success'].includes(normalized)) return 'text-bg-success';
+    if (['failure', 'failed', 'cancelled', 'aborted'].includes(normalized)) return 'text-bg-danger';
+    return 'text-bg-secondary';
+  }
+
+  refreshBoard(): void {
+    this.loadRuns();
+    this.pollActiveRuns();
   }
 
   toggleRunDetails(run: ExecuteRun): void {

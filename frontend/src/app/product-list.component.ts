@@ -7,7 +7,8 @@ import { EnvHealthService, EnvRun } from './env-health.service';
   standalone: true,
   selector: 'app-product-list',
   imports: [CommonModule, FormsModule],
-  templateUrl: './product-list.component.html'
+  templateUrl: './product-list.component.html',
+  styleUrls: ['./product-list.component.css']
 })
 export class ProductListComponent implements OnInit {
   runs: EnvRun[] = [];
@@ -22,6 +23,36 @@ export class ProductListComponent implements OnInit {
 
   ngOnInit(): void {
     this.fetchRuns();
+  }
+
+  get visibleRuns(): EnvRun[] {
+    return this.filteredRuns();
+  }
+
+  get totalSnapshots(): number {
+    return this.visibleRuns.length;
+  }
+
+  get latestRun(): EnvRun | null {
+    return this.visibleRuns[0] || null;
+  }
+
+  get aggregateCounts() {
+    return this.visibleRuns.reduce(
+      (summary, run) => {
+        const counts = this.statusCounts(run);
+        summary.pass += counts.pass;
+        summary.warn += counts.warn;
+        summary.fail += counts.fail;
+        return summary;
+      },
+      { pass: 0, warn: 0, fail: 0 }
+    );
+  }
+
+  get selectedDayLabel(): string {
+    if (this.selectedDay === 'all') return 'All snapshots';
+    return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(`${this.selectedDay}T12:00:00`));
   }
 
   fetchRuns(): void {
@@ -80,6 +111,20 @@ export class ProductListComponent implements OnInit {
       else summary.fail++;
     });
     return summary;
+  }
+
+  latestStatusLabel(run: EnvRun): string {
+    const counts = this.statusCounts(run);
+    if (counts.fail > 0) return 'Needs attention';
+    if (counts.warn > 0) return 'Watch closely';
+    return 'Healthy';
+  }
+
+  statusBadgeClass(status: string | null | undefined): string {
+    const normalized = String(status || '').toUpperCase();
+    if (normalized === 'PASS') return 'bg-success-subtle text-success-emphasis';
+    if (normalized === 'WARNING' || normalized === 'WARN') return 'bg-warning-subtle text-warning-emphasis';
+    return 'bg-danger-subtle text-danger-emphasis';
   }
 
   toggle(run: EnvRun): void {
