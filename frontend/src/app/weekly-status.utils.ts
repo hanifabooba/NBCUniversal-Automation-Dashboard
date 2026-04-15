@@ -69,6 +69,30 @@ export function formatPercent(value?: number | null): string {
   return `${Number(value).toFixed(2)}%`;
 }
 
+function extractMessageFromRawBody(rawBody: string): string {
+  const trimmed = rawBody.trim();
+  if (!trimmed) return '';
+
+  try {
+    const parsed = JSON.parse(trimmed) as { message?: string; error?: string };
+    if (typeof parsed?.message === 'string' && parsed.message.trim()) {
+      return parsed.message.trim();
+    }
+    if (typeof parsed?.error === 'string' && parsed.error.trim()) {
+      return parsed.error.trim();
+    }
+  } catch {
+    // Keep falling through to plain-text and HTML checks.
+  }
+
+  const normalized = trimmed.toLowerCase();
+  if (normalized.startsWith('<!doctype') || normalized.startsWith('<html')) {
+    return 'The weekly status service returned an unexpected response. Please contact DevOps to verify the production API route is serving JSON correctly.';
+  }
+
+  return trimmed;
+}
+
 export function friendlyWeeklyStatusError(err: any, fallback: string): string {
   const backendMessage = typeof err?.error?.message === 'string' ? err.error.message.trim() : '';
   if (backendMessage) {
@@ -76,12 +100,19 @@ export function friendlyWeeklyStatusError(err: any, fallback: string): string {
   }
 
   const rawBody = typeof err?.error === 'string' ? err.error.trim() : '';
-  if (rawBody && !rawBody.startsWith('<!DOCTYPE') && !rawBody.startsWith('<html')) {
-    return rawBody;
+  if (rawBody) {
+    const extracted = extractMessageFromRawBody(rawBody);
+    if (extracted) {
+      return extracted;
+    }
   }
 
   const rawMessage = typeof err?.message === 'string' ? err.message.trim() : '';
-  if (rawMessage.includes('Http failure during parsing')) {
+  if (
+    rawMessage.includes('Http failure during parsing') ||
+    rawMessage.includes('unexpected response') ||
+    rawMessage.includes('invalid JSON')
+  ) {
     return 'The weekly status service returned an unexpected response. Please contact DevOps to verify the production API route is serving JSON correctly.';
   }
 

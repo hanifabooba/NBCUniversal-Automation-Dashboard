@@ -2350,6 +2350,10 @@ app.post('/api/results/upload-summary', async (req, res) => {
 });
 
 const DEFAULT_JENKINS_HTTP_TIMEOUT_MS = Math.max(1000, Number(process.env.JENKINS_HTTP_TIMEOUT_MS || 10000));
+const DEFAULT_WEEKLY_STATUS_REFRESH_TIMEOUT_MS = Math.max(
+  1000,
+  Number(process.env.WEEKLY_STATUS_REFRESH_TIMEOUT_MS || 12000)
+);
 
 async function fetchJenkinsWithTimeout(url: string, init: RequestInit = {}, timeoutMs = DEFAULT_JENKINS_HTTP_TIMEOUT_MS): Promise<Response> {
   const controller = new AbortController();
@@ -2373,6 +2377,27 @@ async function fetchJenkinsWithTimeout(url: string, init: RequestInit = {}, time
     throw err;
   } finally {
     clearTimeout(timeoutHandle);
+  }
+}
+
+async function awaitWithTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          const timeoutError = new Error(message) as Error & { status?: number };
+          timeoutError.status = 504;
+          reject(timeoutError);
+        }, timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
   }
 }
 
@@ -2623,42 +2648,48 @@ async function resolveWeeklyExecutionArtifacts(runPrefix: string): Promise<Parti
 
   const jsonKey = `${prefix}/test.json`;
   const htmlKey = `${prefix}/result.html`;
+  const jsonCandidates = Array.from(
+    new Set(
+      expandDateVariants(jsonKey).flatMap(candidate => {
+        const variants = [candidate, `${candidate}.gz`, `${candidate}.zip`];
+        const cucumberCandidate = candidate.replace(/test\.json$/i, 'cucumber.json');
+        variants.push(cucumberCandidate, `${cucumberCandidate}.gz`, `${cucumberCandidate}.zip`);
+        return variants;
+      })
+    )
+  );
   const patch: Partial<StoredWeeklyExecution> = {};
 
-  try {
-    const resultUrlResp = await fetch(`${INTERNAL_BASE_URL}/api/results/result-url?key=${encodeURIComponent(htmlKey)}`);
-    if (resultUrlResp.ok) {
-      const body = (await resultUrlResp.json()) as { url?: string };
-      if (body?.url) patch.resultsLink = body.url;
-    }
-  } catch {
-    // keep board responsive even if artifact lookup is transiently unavailable
+  const cachedRun = findStoredResultRunByKeys(jsonCandidates, true);
+  const resolvedUrl = resolveStoredResultUrl(cachedRun) || presignS3GetUrl(htmlKey) || s3UrlForKey(htmlKey);
+  if (resolvedUrl) {
+    patch.resultsLink = resolvedUrl;
   }
 
-  try {
-    const summaryResp = await fetch(`${INTERNAL_BASE_URL}/api/results/fetch-json`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ key: jsonKey })
-    });
-    if (summaryResp.ok) {
-      const body = (await summaryResp.json()) as {
-        resultUrl?: string;
-        summary?: { passed?: number; failed?: number; total?: number };
-      };
-      if (body?.resultUrl && !patch.resultsLink) patch.resultsLink = body.resultUrl;
-      if (body?.summary) {
-        const passed = toFiniteNumber(body.summary.passed);
-        const failed = toFiniteNumber(body.summary.failed);
-        const total = toFiniteNumber(body.summary.total, passed + failed);
-        patch.passed = passed;
-        patch.failed = failed;
-        patch.totalAutomated = total > 0 ? total : undefined;
-        patch.passRate = computePassRate(passed, failed, 0);
-      }
-    }
-  } catch {
-    // ignore; result link is still useful without parsed summary
+  if (!cachedRun) {
+    return patch;
+  }
+
+  const summary =
+    cachedRun.total || cachedRun.passed || cachedRun.failed || cachedRun.skipped
+      ? {
+          passed: toFiniteNumber(cachedRun.passed),
+          failed: toFiniteNumber(cachedRun.failed),
+          skipped: toFiniteNumber(cachedRun.skipped),
+          total: toFiniteNumber(
+            cachedRun.total,
+            toFiniteNumber(cachedRun.passed) + toFiniteNumber(cachedRun.failed) + toFiniteNumber(cachedRun.skipped)
+          )
+        }
+      : Array.isArray(cachedRun.data) && cachedRun.data.length
+        ? countStatuses(cachedRun.data)
+        : null;
+
+  if (summary) {
+    patch.passed = summary.passed;
+    patch.failed = summary.failed;
+    patch.totalAutomated = summary.total > 0 ? summary.total : undefined;
+    patch.passRate = computePassRate(summary.passed, summary.failed, 0);
   }
 
   return patch;
@@ -2729,11 +2760,29 @@ async function syncWeeklyExecution(execution: StoredWeeklyExecution): Promise<St
 
 async function refreshWeeklyExecutionsForRange(weekStart: string, weekEnd: string): Promise<StoredWeeklyExecution[]> {
   const executions = listWeeklyExecutions(weekStart, weekEnd);
-  for (const execution of executions) {
-    if (execution.status === 'QUEUED' || execution.status === 'RUNNING') {
-      await syncWeeklyExecution(execution);
-    }
+  const activeExecutions = executions.filter(
+    execution => execution.status === 'QUEUED' || execution.status === 'RUNNING'
+  );
+
+  if (!activeExecutions.length) {
+    return executions;
   }
+
+  try {
+    await awaitWithTimeout(
+      Promise.allSettled(activeExecutions.map(execution => syncWeeklyExecution(execution))),
+      DEFAULT_WEEKLY_STATUS_REFRESH_TIMEOUT_MS,
+      `Weekly status refresh timed out after ${DEFAULT_WEEKLY_STATUS_REFRESH_TIMEOUT_MS}ms`
+    );
+  } catch (err: any) {
+    console.warn('Weekly status refresh fallback', {
+      weekStart,
+      weekEnd,
+      activeCount: activeExecutions.length,
+      message: String(err?.message || err)
+    });
+  }
+
   return listWeeklyExecutions(weekStart, weekEnd);
 }
 
