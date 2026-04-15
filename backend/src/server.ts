@@ -931,6 +931,85 @@ function computePassRate(passed: number, failed: number, fallback = 0): number {
   return Number(((passed / total) * 100).toFixed(2));
 }
 
+const DEFAULT_RESULT_INGEST_TIMEOUT_MS = Math.max(1000, Number(process.env.RESULT_INGEST_TIMEOUT_MS || 8000));
+
+async function fetchWithTimeout(url: string, init: RequestInit = {}, timeoutMs = DEFAULT_RESULT_INGEST_TIMEOUT_MS): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: controller.signal
+    });
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
+}
+
+function deriveResultHtmlKeyFromRunKey(key: string): string {
+  const normalized = String(key || '').trim();
+  if (!normalized) return normalized;
+  if (/result\.html$/i.test(normalized)) return normalized;
+  if (/(test|cucumber)\.json(\.gz|\.zip)?$/i.test(normalized)) {
+    return normalized.replace(/(test|cucumber)\.json(\.gz|\.zip)?$/i, 'result.html');
+  }
+  return normalized.replace(/\/+$/, '') + '/result.html';
+}
+
+function deriveStoredResultUrl(key: string, providedResultUrl?: string, existingResultUrl?: string): string | undefined {
+  if (providedResultUrl) return providedResultUrl;
+  if (existingResultUrl) return existingResultUrl;
+  const htmlKey = deriveResultHtmlKeyFromRunKey(key);
+  return presignS3GetUrl(htmlKey) || s3UrlForKey(htmlKey);
+}
+
+async function hydrateStoredResultHtml(input: {
+  id: string;
+  key: string;
+  name: string;
+  createdAt: string;
+  resultUrl?: string;
+  existingResultHtml?: boolean;
+}): Promise<boolean> {
+  if (!input.resultUrl || input.existingResultHtml) {
+    return false;
+  }
+
+  try {
+    const resp = await fetchWithTimeout(
+      input.resultUrl,
+      {
+        headers: {
+          Accept: 'text/html,application/xhtml+xml'
+        }
+      },
+      DEFAULT_RESULT_INGEST_TIMEOUT_MS
+    );
+    if (!resp.ok) {
+      return false;
+    }
+
+    const html = await resp.text();
+    if (!html || !html.trim()) {
+      return false;
+    }
+
+    upsertResultRunToDb({
+      id: input.id,
+      key: input.key,
+      name: input.name,
+      createdAt: input.createdAt,
+      resultUrl: input.resultUrl,
+      resultHtml: html
+    });
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function mapWeeklyExecutionRow(row: any): StoredWeeklyExecution {
   return {
     id: String(row.id),
@@ -1674,11 +1753,12 @@ app.post('/api/results/fetch-json', async (req, res) => {
     const resultLink = presignS3GetUrl(`${prefix}/result.html`) || s3UrlForKey(`${prefix}/result.html`);
     const runs = loadResultRuns(true);
     const existingIdx = runs.findIndex(r => r.key === baseKey);
+    const existingRun = existingIdx >= 0 ? runs[existingIdx] : undefined;
     const id = existingIdx >= 0 ? runs[existingIdx].id : `${Date.now()}`;
     const createdAt = existingIdx >= 0 ? runs[existingIdx].createdAt : nowIso;
     const entry: StoredResultRun = {
       id,
-      name: runs[existingIdx]?.name || baseKey,
+      name: existingRun?.name || baseKey,
       key: baseKey,
       resultUrl: resultLink,
       data: [],
@@ -1694,6 +1774,14 @@ app.post('/api/results/fetch-json', async (req, res) => {
       runs.push(entry);
     }
     saveResultRuns(runs);
+    await hydrateStoredResultHtml({
+      id,
+      key: baseKey,
+      name: entry.name,
+      createdAt,
+      resultUrl: resultLink,
+      existingResultHtml: Boolean(existingRun?.hasResultHtml)
+    });
 
     return res.json({
       key: baseKey,
@@ -1731,12 +1819,13 @@ app.post('/api/results/fetch-json', async (req, res) => {
   const resultLink = presignS3GetUrl(`${prefix}/result.html`) || s3UrlForKey(`${prefix}/result.html`);
   const runs = loadResultRuns(true);
   const existingIdx = runs.findIndex(r => r.key === parsed.usedKey);
+  const existingRun = existingIdx >= 0 ? runs[existingIdx] : undefined;
   const nowIso = new Date().toISOString();
   const id = existingIdx >= 0 ? runs[existingIdx].id : `${Date.now()}`;
   const createdAt = existingIdx >= 0 ? runs[existingIdx].createdAt : nowIso;
   const entry: StoredResultRun = {
     id,
-    name: runs[existingIdx]?.name || parsed.usedKey,
+    name: existingRun?.name || parsed.usedKey,
     key: parsed.usedKey,
     resultUrl: resultLink,
     data: parsed.data,
@@ -1752,6 +1841,14 @@ app.post('/api/results/fetch-json', async (req, res) => {
     runs.push(entry);
   }
   saveResultRuns(runs);
+  await hydrateStoredResultHtml({
+    id,
+    key: parsed.usedKey,
+    name: entry.name,
+    createdAt,
+    resultUrl: resultLink,
+    existingResultHtml: Boolean(existingRun?.hasResultHtml)
+  });
 
   res.json({
     key: parsed.usedKey,
@@ -1768,7 +1865,7 @@ app.post('/api/results/fetch-json', async (req, res) => {
 });
 
 // Accept an uploaded test.json payload (from Jenkins) and cache/update run
-app.post('/api/results/upload-json', (req, res) => {
+app.post('/api/results/upload-json', async (req, res) => {
   const body = req.body as { data?: any; raw?: any; key?: string; resultUrl?: string; name?: string };
   const incoming = body?.data ?? body?.raw;
   if (!incoming) return res.status(400).json({ message: 'data is required' });
@@ -1785,18 +1882,16 @@ app.post('/api/results/upload-json', (req, res) => {
   fs.writeFileSync(latestTestFile, JSON.stringify(data, null, 2), 'utf8');
 
   const usedKey = body.key || 'uploaded/test.json';
-  const prefix = usedKey.replace(/\/?test\.json(\.zip|\.gz)?$/i, '');
-  const resultLink =
-    body.resultUrl || presignS3GetUrl(`${prefix}/result.html`) || s3UrlForKey(`${prefix}/result.html`);
-
   const runs = loadResultRuns(true);
   const existingIdx = runs.findIndex(r => r.key === usedKey);
+  const existingRun = existingIdx >= 0 ? runs[existingIdx] : undefined;
   const nowIso = new Date().toISOString();
-  const id = existingIdx >= 0 ? runs[existingIdx].id : `${Date.now()}`;
-  const createdAt = existingIdx >= 0 ? runs[existingIdx].createdAt : nowIso;
+  const id = existingRun?.id || `${Date.now()}`;
+  const createdAt = existingRun?.createdAt || nowIso;
+  const resultLink = deriveStoredResultUrl(usedKey, body.resultUrl, existingRun?.resultUrl);
   const entry: StoredResultRun = {
     id,
-    name: body.name || runs[existingIdx]?.name || usedKey,
+    name: body.name || existingRun?.name || usedKey,
     key: usedKey,
     resultUrl: resultLink,
     data,
@@ -1808,6 +1903,14 @@ app.post('/api/results/upload-json', (req, res) => {
     runs.push(entry);
   }
   saveResultRuns(runs);
+  await hydrateStoredResultHtml({
+    id,
+    key: usedKey,
+    name: entry.name,
+    createdAt,
+    resultUrl: resultLink,
+    existingResultHtml: Boolean(existingRun?.hasResultHtml)
+  });
 
   res.status(201).json({
     saved: true,
@@ -1824,7 +1927,7 @@ app.post('/api/results/upload-json', (req, res) => {
 app.post(
   '/api/results/upload-file',
   express.raw({ type: ['application/octet-stream', 'application/gzip', 'application/x-gzip', 'application/zip'], limit: apiBodyLimit }),
-  (req, res) => {
+  async (req, res) => {
     const key = (req.query.key as string) || (req.header('x-run-key') as string) || '';
     const name = (req.query.name as string) || (req.header('x-run-name') as string) || undefined;
     const resultUrl = (req.query.resultUrl as string) || (req.header('x-result-url') as string) || undefined;
@@ -1845,14 +1948,18 @@ app.post(
     fs.writeFileSync(latestTestFile, JSON.stringify(data ?? [], null, 2), 'utf8');
 
     const usedKey = key;
-    const prefix = usedKey.replace(/\/?test\.json(\.zip|\.gz)?$/i, '');
-    const resultLink = resultUrl || presignS3GetUrl(`${prefix}/result.html`) || s3UrlForKey(`${prefix}/result.html`);
-
-    const existing = db.prepare('SELECT id, createdAt, name FROM test_runs WHERE key = ?').get(usedKey) as
-      | { id: string; createdAt: string; name: string }
+    const existing = db
+      .prepare(
+        `SELECT id, createdAt, name, resultUrl,
+                (resultHtml IS NOT NULL AND length(resultHtml) > 0) as hasResultHtml
+         FROM test_runs WHERE key = ?`
+      )
+      .get(usedKey) as
+      | { id: string; createdAt: string; name: string; resultUrl?: string; hasResultHtml?: number }
       | undefined;
     const id = existing?.id || `${Date.now()}`;
     const createdAt = existing?.createdAt || new Date().toISOString();
+    const resultLink = deriveStoredResultUrl(usedKey, resultUrl, existing?.resultUrl);
 
     upsertResultRunToDb({
       id,
@@ -1861,6 +1968,14 @@ app.post(
       resultUrl: resultLink,
       data,
       createdAt
+    });
+    await hydrateStoredResultHtml({
+      id,
+      key: usedKey,
+      name: name || existing?.name || usedKey,
+      createdAt,
+      resultUrl: resultLink,
+      existingResultHtml: Boolean(existing?.hasResultHtml)
     });
 
     res.status(201).json({
@@ -1879,7 +1994,7 @@ app.post(
 app.post(
   '/api/results/upload-report-zip',
   express.raw({ type: ['application/zip', 'application/octet-stream'], limit: apiBodyLimit }),
-  (req, res) => {
+  async (req, res) => {
     const key = (req.query.key as string) || (req.header('x-run-key') as string) || '';
     const name = (req.query.name as string) || (req.header('x-run-name') as string) || undefined;
     const resultUrl = (req.query.resultUrl as string) || (req.header('x-result-url') as string) || undefined;
@@ -1890,19 +2005,34 @@ app.post(
       return res.status(400).json({ message: 'Request body must be the report zip contents.' });
     }
 
-    const existing = db.prepare('SELECT id, createdAt, name, key, resultUrl FROM test_runs WHERE key = ?').get(key) as
-      | { id: string; createdAt: string; name: string; key: string; resultUrl?: string }
+    const existing = db
+      .prepare(
+        `SELECT id, createdAt, name, key, resultUrl,
+                (resultHtml IS NOT NULL AND length(resultHtml) > 0) as hasResultHtml
+         FROM test_runs WHERE key = ?`
+      )
+      .get(key) as
+      | { id: string; createdAt: string; name: string; key: string; resultUrl?: string; hasResultHtml?: number }
       | undefined;
     const id = existing?.id || `${Date.now()}`;
     const createdAt = existing?.createdAt || new Date().toISOString();
+    const resultLink = deriveStoredResultUrl(key, resultUrl, existing?.resultUrl);
 
     upsertResultRunToDb({
       id,
       name: name || existing?.name || key,
       key,
-      resultUrl: resultUrl || existing?.resultUrl,
+      resultUrl: resultLink,
       createdAt,
       reportZip: buffer
+    });
+    await hydrateStoredResultHtml({
+      id,
+      key,
+      name: name || existing?.name || key,
+      createdAt,
+      resultUrl: resultLink,
+      existingResultHtml: Boolean(existing?.hasResultHtml)
     });
 
     res.status(201).json({ saved: true, key, runId: id, size: buffer.length });
@@ -1986,12 +2116,13 @@ app.post(
       | undefined;
     const id = existing?.id || `${Date.now()}`;
     const createdAt = existing?.createdAt || new Date().toISOString();
+    const resultLink = deriveStoredResultUrl(key, resultUrl, existing?.resultUrl);
 
     upsertResultRunToDb({
       id,
       name: name || existing?.name || key,
       key,
-      resultUrl: resultUrl || existing?.resultUrl,
+      resultUrl: resultLink,
       createdAt,
       resultHtml: html
     });
@@ -2099,24 +2230,29 @@ app.get('/api/result-runs', (_req, res) => {
   res.json(runs);
 });
 
-app.post('/api/result-runs', (req, res) => {
+app.post('/api/result-runs', async (req, res) => {
   const { name, key, resultUrl, data, passed, failed, skipped, total } = req.body as Partial<StoredResultRun>;
   if (!data && !key) return res.status(400).json({ message: 'key or data is required' });
   const runs = loadResultRuns(true);
   const existing =
     (key ? runs.find(run => run.key === key) : undefined) ||
     (key
-      ? (db.prepare('SELECT id, createdAt, name, key, resultUrl, expiresAt, passed, failed, skipped, total FROM test_runs WHERE key = ?').get(key) as
+      ? (db.prepare(
+          `SELECT id, createdAt, name, key, resultUrl, expiresAt, passed, failed, skipped, total,
+                  (resultHtml IS NOT NULL AND length(resultHtml) > 0) as hasResultHtml
+           FROM test_runs WHERE key = ?`
+        ).get(key) as
           | Partial<StoredResultRun>
           | undefined)
       : undefined);
   const id = existing?.id || `${Date.now()}`;
   const createdAt = existing?.createdAt || new Date().toISOString();
+  const effectiveResultUrl = key ? deriveStoredResultUrl(key, resultUrl, existing?.resultUrl) : resultUrl || existing?.resultUrl;
   const entry: StoredResultRun = {
     id,
     name: name || existing?.name || key || `Run ${createdAt}`,
     key,
-    resultUrl: resultUrl || existing?.resultUrl,
+    resultUrl: effectiveResultUrl,
     data,
     createdAt,
     expiresAt: existing?.expiresAt,
@@ -2135,11 +2271,21 @@ app.post('/api/result-runs', (req, res) => {
     runs.push(entry);
   }
   saveResultRuns(runs);
+  if (key) {
+    await hydrateStoredResultHtml({
+      id,
+      key,
+      name: entry.name,
+      createdAt,
+      resultUrl: effectiveResultUrl,
+      existingResultHtml: Boolean(existing?.hasResultHtml)
+    });
+  }
   res.status(201).json(entry);
 });
 
 // Accept a summary-only payload (from Jenkins) when JSON artifacts are missing.
-app.post('/api/results/upload-summary', (req, res) => {
+app.post('/api/results/upload-summary', async (req, res) => {
   const { key, name, resultUrl, passed, failed, skipped, total, createdAt } = req.body as {
     key?: string;
     name?: string;
@@ -2157,17 +2303,24 @@ app.post('/api/results/upload-summary', (req, res) => {
   const safeSkipped = Number(skipped ?? 0) || 0;
   const safeTotal = Number(total ?? safePassed + safeFailed + safeSkipped) || 0;
 
-  const existing = db.prepare('SELECT id, createdAt, name, resultUrl FROM test_runs WHERE key = ?').get(key) as
-    | { id: string; createdAt: string; name?: string; resultUrl?: string }
+  const existing = db
+    .prepare(
+      `SELECT id, createdAt, name, resultUrl,
+              (resultHtml IS NOT NULL AND length(resultHtml) > 0) as hasResultHtml
+       FROM test_runs WHERE key = ?`
+    )
+    .get(key) as
+    | { id: string; createdAt: string; name?: string; resultUrl?: string; hasResultHtml?: number }
     | undefined;
   const id = existing?.id || `${Date.now()}`;
   const createdAtIso = existing?.createdAt || createdAt || new Date().toISOString();
+  const resultLink = deriveStoredResultUrl(key, resultUrl, existing?.resultUrl);
 
   upsertResultRunToDb({
     id,
     name: name || existing?.name || key,
     key,
-    resultUrl: resultUrl || existing?.resultUrl,
+    resultUrl: resultLink,
     createdAt: createdAtIso,
     data: undefined,
     passed: safePassed,
@@ -2175,11 +2328,20 @@ app.post('/api/results/upload-summary', (req, res) => {
     skipped: safeSkipped,
     total: safeTotal
   });
+  await hydrateStoredResultHtml({
+    id,
+    key,
+    name: name || existing?.name || key,
+    createdAt: createdAtIso,
+    resultUrl: resultLink,
+    existingResultHtml: Boolean(existing?.hasResultHtml)
+  });
 
   res.status(201).json({
     saved: true,
     key,
     runId: id,
+    resultUrl: resultLink,
     passed: safePassed,
     failed: safeFailed,
     skipped: safeSkipped,
@@ -2187,11 +2349,38 @@ app.post('/api/results/upload-summary', (req, res) => {
   });
 });
 
+const DEFAULT_JENKINS_HTTP_TIMEOUT_MS = Math.max(1000, Number(process.env.JENKINS_HTTP_TIMEOUT_MS || 10000));
+
+async function fetchJenkinsWithTimeout(url: string, init: RequestInit = {}, timeoutMs = DEFAULT_JENKINS_HTTP_TIMEOUT_MS): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: controller.signal
+    });
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      const timeoutError = new Error(`Jenkins request timed out after ${timeoutMs}ms`) as Error & {
+        status?: number;
+        details?: string;
+      };
+      timeoutError.status = 504;
+      timeoutError.details = `Timed out while calling ${url}`;
+      throw timeoutError;
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
+}
+
 async function fetchJenkinsCrumb(origin: string, authHeader: string): Promise<{ crumbHeader: Record<string, string>; crumbCookies: string }> {
   let crumbHeader: Record<string, string> = {};
   let crumbCookies = '';
   try {
-    const crumbResp = await fetch(`${origin}/crumbIssuer/api/json`, {
+    const crumbResp = await fetchJenkinsWithTimeout(`${origin}/crumbIssuer/api/json`, {
       headers: { Authorization: authHeader }
     });
     if (crumbResp.ok) {
@@ -2249,7 +2438,7 @@ async function triggerJenkinsBuildRequest(input: {
     if (v !== undefined && v !== null) bodyParams.append(k, v);
   });
 
-  const triggerResp = await fetch(buildUrl, {
+  const triggerResp = await fetchJenkinsWithTimeout(buildUrl, {
     method: 'POST',
     headers: {
       Authorization: authHeader,
@@ -2293,7 +2482,7 @@ async function fetchJenkinsQueueItem(queueId: string | number): Promise<any> {
     throw err;
   }
   const { authHeader } = getJenkinsAuth();
-  const resp = await fetch(`${origin}/queue/item/${queueId}/api/json`, {
+  const resp = await fetchJenkinsWithTimeout(`${origin}/queue/item/${queueId}/api/json`, {
     headers: { Authorization: authHeader }
   });
   if (!resp.ok) {
@@ -2320,7 +2509,7 @@ async function fetchJenkinsBuildData(buildUrl: string): Promise<any> {
   }
   const { authHeader } = getJenkinsAuth();
   const target = buildUrl.endsWith('/api/json') ? buildUrl : `${buildUrl.replace(/\/api\/json$/, '')}/api/json`;
-  const resp = await fetch(target, {
+  const resp = await fetchJenkinsWithTimeout(target, {
     headers: { Authorization: authHeader }
   });
   if (!resp.ok) {
@@ -2919,7 +3108,7 @@ app.post('/api/jenkins/queue/:id/cancel', async (req, res) => {
     const queueId = req.params.id;
     const { crumbHeader, crumbCookies } = await fetchJenkinsCrumb(origin, authHeader);
 
-    const resp = await fetch(`${origin}/queue/item/${queueId}/cancel`, {
+    const resp = await fetchJenkinsWithTimeout(`${origin}/queue/item/${queueId}/cancel`, {
       method: 'POST',
       headers: {
         Authorization: authHeader,
@@ -2933,6 +3122,9 @@ app.post('/api/jenkins/queue/:id/cancel', async (req, res) => {
     }
     res.json({ cancelled: true, queueId });
   } catch (err: any) {
+    if (err?.status) {
+      return res.status(err.status).json({ message: err.message || 'Failed to cancel queue item', details: err.details });
+    }
     console.error('Jenkins queue cancel error', err);
     return res.status(500).json({ message: 'Error cancelling Jenkins queue item', error: String(err?.message || err) });
   }
@@ -2966,7 +3158,7 @@ app.post('/api/jenkins/build/stop', async (req, res) => {
     const { crumbHeader, crumbCookies } = await fetchJenkinsCrumb(origin, authHeader);
 
     const stopUrl = buildUrl.endsWith('/') ? `${buildUrl}stop` : `${buildUrl}/stop`;
-    const resp = await fetch(stopUrl, {
+    const resp = await fetchJenkinsWithTimeout(stopUrl, {
       method: 'POST',
       headers: {
         Authorization: authHeader,
@@ -2980,6 +3172,9 @@ app.post('/api/jenkins/build/stop', async (req, res) => {
     }
     res.json({ stopped: true, url: stopUrl });
   } catch (err: any) {
+    if (err?.status) {
+      return res.status(err.status).json({ message: err.message || 'Failed to stop build', details: err.details });
+    }
     console.error('Jenkins stop build error', err);
     return res.status(500).json({ message: 'Error stopping Jenkins build', error: String(err?.message || err) });
   }

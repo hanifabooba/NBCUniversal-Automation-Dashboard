@@ -29,8 +29,7 @@
               "optimization": true,
               "outputHashing": "all",
               "sourceMap": false,
-              "extractLicenses": true,
-              "inspect": false
+              "extractLicenses": true
             },
             "development": {
               "buildOptimizer": false,
@@ -38,7 +37,7 @@
               "sourceMap": true
             }
           },
-          "defaultConfiguration": "development"
+          "defaultConfiguration": "production"
         },
         "serve": {
           "builder": "@angular-devkit/build-angular:dev-server",

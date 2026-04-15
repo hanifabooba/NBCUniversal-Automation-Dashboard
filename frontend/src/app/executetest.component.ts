@@ -382,8 +382,8 @@ export class ExecuteTestComponent {
 
   private pollActiveRuns(): void {
     this.recentRuns.forEach(run => {
-      if (run.status === 'queued' && run.id) {
-        this.jenkins.getQueueInfo(run.id).subscribe({
+      if (run.status === 'queued' && run.queueId) {
+        this.jenkins.getQueueInfo(run.queueId).subscribe({
           next: info => {
             if (info.cancelled) run.status = 'cancelled';
             if (info.executable?.url) {
