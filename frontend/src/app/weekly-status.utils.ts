@@ -69,6 +69,33 @@ export function formatPercent(value?: number | null): string {
   return `${Number(value).toFixed(2)}%`;
 }
 
+export function friendlyWeeklyStatusError(err: any, fallback: string): string {
+  const backendMessage = typeof err?.error?.message === 'string' ? err.error.message.trim() : '';
+  if (backendMessage) {
+    return backendMessage;
+  }
+
+  const rawBody = typeof err?.error === 'string' ? err.error.trim() : '';
+  if (rawBody && !rawBody.startsWith('<!DOCTYPE') && !rawBody.startsWith('<html')) {
+    return rawBody;
+  }
+
+  const rawMessage = typeof err?.message === 'string' ? err.message.trim() : '';
+  if (rawMessage.includes('Http failure during parsing')) {
+    return 'The weekly status service returned an unexpected response. Please contact DevOps to verify the production API route is serving JSON correctly.';
+  }
+
+  const status = Number(err?.status ?? 0);
+  if (status === 0) {
+    return 'The weekly status service could not be reached. Please verify the production API and reverse proxy are available.';
+  }
+  if (status >= 500) {
+    return 'The weekly status service is temporarily unavailable. Please try again shortly.';
+  }
+
+  return fallback;
+}
+
 export function statusBadgeClass(status?: string): string {
   switch (String(status || '').toUpperCase()) {
     case 'SUCCESS':

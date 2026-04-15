@@ -17,7 +17,13 @@ import {
   WeeklySuiteFilter
 } from './weekly-status.models';
 import { WeeklyStatusService } from './weekly-status.service';
-import { formatPercent, getWorkingWeekRange, getWorkingWeekRangeFromInput, statusBadgeClass } from './weekly-status.utils';
+import {
+  friendlyWeeklyStatusError,
+  formatPercent,
+  getWorkingWeekRange,
+  getWorkingWeekRangeFromInput,
+  statusBadgeClass
+} from './weekly-status.utils';
 
 interface AutomationKpiMetrics {
   healthIndex: number;
@@ -202,7 +208,7 @@ export class AutomationKpiPageComponent implements OnInit, OnDestroy {
           this.lastUpdatedLabel = this.findLastUpdatedLabel(current.rows || []);
         },
         error: err => {
-          this.error = err?.error?.message || err?.message || 'Unable to load automation KPI data.';
+          this.error = friendlyWeeklyStatusError(err, 'Unable to load automation KPI data.');
         }
       });
   }

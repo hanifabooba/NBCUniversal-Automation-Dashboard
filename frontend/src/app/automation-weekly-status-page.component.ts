@@ -18,6 +18,7 @@ import {
 } from './weekly-status.models';
 import { WeeklyStatusService } from './weekly-status.service';
 import {
+  friendlyWeeklyStatusError,
   formatPercent,
   getWorkingWeekRangeFromInput,
   statusBadgeClass
@@ -128,7 +129,7 @@ export class AutomationWeeklyStatusPageComponent implements OnInit, OnDestroy {
           this.loadBoard(false);
         },
         error: err => {
-          this.error = err?.error?.message || err?.message || 'Unable to trigger weekly jobs.';
+          this.error = friendlyWeeklyStatusError(err, 'Unable to trigger weekly jobs.');
         }
       });
   }
@@ -148,7 +149,7 @@ export class AutomationWeeklyStatusPageComponent implements OnInit, OnDestroy {
           this.loadBoard(false);
         },
         error: err => {
-          this.error = err?.error?.message || err?.message || `Unable to trigger ${label}.`;
+          this.error = friendlyWeeklyStatusError(err, `Unable to trigger ${label}.`);
         }
       });
   }
@@ -172,7 +173,7 @@ export class AutomationWeeklyStatusPageComponent implements OnInit, OnDestroy {
           URL.revokeObjectURL(url);
         },
         error: err => {
-          this.error = err?.error?.message || err?.message || 'Unable to export the weekly board.';
+          this.error = friendlyWeeklyStatusError(err, 'Unable to export the weekly board.');
         }
       });
   }
@@ -223,7 +224,7 @@ export class AutomationWeeklyStatusPageComponent implements OnInit, OnDestroy {
           this.board = response;
         },
         error: err => {
-          this.error = err?.error?.message || err?.message || 'Unable to load the weekly status board.';
+          this.error = friendlyWeeklyStatusError(err, 'Unable to load the weekly status board.');
         }
       });
   }
