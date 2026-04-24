@@ -54,7 +54,14 @@
       </div>
 
       <div *ngIf="links.length; else emptyState" class="cases-grid">
-        <a class="cases-link-card" *ngFor="let link of links" [href]="link.url" target="_blank" rel="noreferrer">
+        <a
+          class="cases-link-card"
+          *ngFor="let link of links"
+          [attr.href]="link.blocked ? null : link.url"
+          [attr.target]="link.blocked ? null : '_blank'"
+          [attr.rel]="link.blocked ? null : 'noreferrer'"
+          [attr.aria-disabled]="link.blocked ? 'true' : null"
+          (click)="openLink($event, link)">
           <div class="cases-link-card__topline">
             <div class="cases-link-card__title">{{ link.title }}</div>
             <span *ngIf="link.tag" class="badge text-bg-light">{{ link.tag }}</span>
@@ -78,4 +85,20 @@
   <ng-template #emptyState>
     <div class="cases-empty">No test case links yet. Add them to the Test Cases Hub.</div>
   </ng-template>
+
+  <div class="cases-modal-backdrop" *ngIf="blockedModalMessage" (click)="closeBlockedModal()">
+    <div
+      class="cases-modal shadow-lg"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="blocked-source-title"
+      (click)="$event.stopPropagation()">
+      <div class="cases-modal__eyebrow">Source unavailable</div>
+      <h3 id="blocked-source-title" class="cases-modal__title">This source is temporarily unavailable</h3>
+      <p class="cases-modal__copy">{{ blockedModalMessage }}</p>
+      <div class="cases-modal__actions">
+        <button type="button" class="btn btn-success btn-sm" (click)="closeBlockedModal()">Understood</button>
+      </div>
+    </div>
+  </div>
 </section>

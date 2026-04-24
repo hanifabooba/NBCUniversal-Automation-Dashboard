@@ -9,42 +9,18 @@ import {
   JenkinsTriggerRequest,
   JenkinsTriggerResponse
 } from './jenkins.service';
+import {
+  ExecuteRunType,
+  ExecuteTestRunsService,
+  SharedExecuteTestRun
+} from './execute-test-runs.service';
 import { TestResultsService } from './test-results.service';
-import { ReleaseService } from './release.service';
 import { WeeklyJobStatus } from './weekly-status.models';
 import { WeeklyStatusService } from './weekly-status.service';
 
-type ExecuteRunType = 'tag' | 'test-cases';
-
-interface ExecuteRun {
-  id: number;
-  status: string;
-  who: string;
-  when: string;
-  date: string;
-  env: string;
-  feature: string;
-  displayLabel: string;
-  runType: ExecuteRunType;
-  featureFiles?: string[];
-  browser?: string;
-  deviceType?: string;
-  branch?: string;
-  comment?: string;
-  jira?: string;
-  queueUrl?: string;
-  buildUrl?: string;
-  buildNumber?: number;
-  queueId?: number;
-  note?: string;
-  prefix?: string;
-  testJsonUrl?: string;
-  resultUrl?: string;
+type ExecuteRun = SharedExecuteTestRun & {
   fetchingArtifacts?: boolean;
-  artifactError?: string;
-  createdAtIso?: string;
-  weeklyExecutionId?: string;
-}
+};
 
 @Component({
   standalone: true,
@@ -161,8 +137,8 @@ export class ExecuteTestComponent {
 
   constructor(
     private jenkins: JenkinsService,
+    private executeTestRuns: ExecuteTestRunsService,
     private testResults: TestResultsService,
-    private releases: ReleaseService,
     private weeklyStatus: WeeklyStatusService
   ) {}
 
@@ -302,7 +278,7 @@ export class ExecuteTestComponent {
   }
 
   ngOnInit(): void {
-    this.loadRuns();
+    this.loadRuns(true);
     this.startPolling();
   }
 
@@ -361,8 +337,7 @@ export class ExecuteTestComponent {
   }
 
   refreshBoard(): void {
-    this.loadRuns();
-    this.pollActiveRuns();
+    this.loadRuns(true);
   }
 
   toggleRunDetails(run: ExecuteRun): void {
@@ -376,7 +351,7 @@ export class ExecuteTestComponent {
 
   private startPolling(): void {
     this.pollHandle = setInterval(() => {
-      this.pollActiveRuns();
+      this.loadRuns(true);
     }, 5000);
   }
 
@@ -392,7 +367,7 @@ export class ExecuteTestComponent {
               run.status = 'running';
             }
             this.syncRunToWeeklyBoard(run);
-            this.saveRuns();
+            this.persistRun(run);
             this.updateBannerStatus();
           },
           error: () => {
@@ -415,7 +390,7 @@ export class ExecuteTestComponent {
               }
             }
             this.syncRunToWeeklyBoard(run);
-            this.saveRuns();
+            this.persistRun(run);
             this.updateBannerStatus();
           },
           error: () => {
@@ -431,7 +406,7 @@ export class ExecuteTestComponent {
               if (!run.testJsonUrl && !run.fetchingArtifacts) {
                 this.fetchArtifacts(run);
               }
-              this.saveRuns();
+              this.persistRun(run);
               this.updateBannerStatus();
             }
           },
@@ -452,7 +427,7 @@ export class ExecuteTestComponent {
         next: () => {
           run.status = 'cancelled';
           this.syncRunToWeeklyBoard(run, { status: 'FAILED', errorMessage: 'Run cancelled from dashboard.' });
-          this.saveRuns();
+          this.persistRun(run);
           this.updateBannerStatus();
         },
         error: err => {
@@ -464,7 +439,7 @@ export class ExecuteTestComponent {
         next: () => {
           run.status = 'cancelled';
           this.syncRunToWeeklyBoard(run, { status: 'FAILED', errorMessage: 'Run stopped from dashboard.' });
-          this.saveRuns();
+          this.persistRun(run);
           this.updateBannerStatus();
         },
         error: err => {
@@ -523,44 +498,83 @@ export class ExecuteTestComponent {
     this.recentRuns.unshift(run);
     this.recentRuns = this.recentRuns.slice(0, 20);
     this.expandedRunId = newRunId;
-    this.releases.add({
-      id: newRunId,
-      qa: input.who,
-      feature: displayLabel,
-      featureFiles,
-      branch: input.branch,
-      runType: input.runType,
-      environment: input.env,
-      comment: input.comment || '',
-      jira: input.jira || '',
-      stage: 'orders',
-      createdAt: createdAtIso
-    });
-    this.saveRuns();
+    this.persistRun(run);
     this.updateBannerStatus();
     return run;
   }
 
-  private saveRuns(): void {
-    try {
-      localStorage.setItem('jenkins-runs', JSON.stringify(this.recentRuns));
-    } catch {
-      // ignore storage errors
-    }
+  private loadRuns(pollAfterLoad = false): void {
+    const fetchingById = new Map(this.recentRuns.map(run => [run.id, Boolean(run.fetchingArtifacts)]));
+
+    this.executeTestRuns.listRuns(20).subscribe({
+      next: runs => {
+        this.recentRuns = runs.map(raw => {
+          const normalized = this.normalizeStoredRun(raw);
+          normalized.fetchingArtifacts = fetchingById.get(normalized.id) || false;
+          return normalized;
+        });
+        this.updateBannerStatus();
+        this.ensureExpandedRun();
+        if (pollAfterLoad) {
+          this.pollActiveRuns();
+        }
+      },
+      error: () => {
+        this.updateBannerStatus();
+        this.ensureExpandedRun();
+      }
+    });
   }
 
-  private loadRuns(): void {
-    try {
-      const raw = localStorage.getItem('jenkins-runs');
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        this.recentRuns = Array.isArray(parsed) ? parsed.map(run => this.normalizeStoredRun(run)).slice(0, 20) : [];
+  private persistRun(run: ExecuteRun): void {
+    this.executeTestRuns.upsertRun(this.toSharedRun(run)).subscribe({
+      next: saved => {
+        const savedRun = this.normalizeStoredRun(saved);
+        const existing = this.recentRuns.find(item => item.id === savedRun.id);
+        savedRun.fetchingArtifacts = existing?.fetchingArtifacts || false;
+        if (existing) {
+          Object.assign(existing, savedRun);
+        } else {
+          this.recentRuns = [savedRun, ...this.recentRuns].slice(0, 20);
+        }
+        this.updateBannerStatus();
+        this.ensureExpandedRun();
+      },
+      error: () => {
+        // Keep the local optimistic state even if sync fails.
       }
-    } catch {
-      this.recentRuns = [];
-    }
-    this.updateBannerStatus();
-    this.ensureExpandedRun();
+    });
+  }
+
+  private toSharedRun(run: ExecuteRun): SharedExecuteTestRun {
+    return {
+      id: run.id,
+      status: run.status,
+      who: run.who,
+      when: run.when,
+      date: run.date,
+      env: run.env,
+      feature: run.feature,
+      displayLabel: run.displayLabel,
+      runType: run.runType,
+      featureFiles: run.featureFiles,
+      browser: run.browser,
+      deviceType: run.deviceType,
+      branch: run.branch,
+      comment: run.comment,
+      jira: run.jira,
+      queueUrl: run.queueUrl,
+      buildUrl: run.buildUrl,
+      buildNumber: run.buildNumber,
+      queueId: run.queueId,
+      note: run.note,
+      prefix: run.prefix,
+      testJsonUrl: run.testJsonUrl,
+      resultUrl: run.resultUrl,
+      artifactError: run.artifactError,
+      createdAtIso: run.createdAtIso,
+      weeklyExecutionId: run.weeklyExecutionId
+    };
   }
 
   private normalizeStoredRun(raw: any): ExecuteRun {
@@ -572,13 +586,17 @@ export class ExecuteTestComponent {
       this.optionalString(raw?.displayLabel) ||
       this.optionalString(raw?.feature) ||
       (featureFiles?.length ? this.buildFeatureFilesLabel(featureFiles) : 'Unknown selection');
+    const createdAtIso = this.optionalString(raw?.createdAtIso);
+    const createdAt = createdAtIso ? new Date(createdAtIso) : null;
+    const fallbackWhen = createdAt && !Number.isNaN(createdAt.getTime()) ? createdAt.toLocaleTimeString() : '';
+    const fallbackDate = createdAt && !Number.isNaN(createdAt.getTime()) ? createdAt.toLocaleDateString() : '';
 
     return {
       id: this.optionalNumber(raw?.id) || Date.now(),
       status: String(raw?.status || 'unknown'),
       who: String(raw?.who || 'Manual QA'),
-      when: String(raw?.when || ''),
-      date: String(raw?.date || ''),
+      when: String(raw?.when || fallbackWhen),
+      date: String(raw?.date || fallbackDate),
       env: String(raw?.env || ''),
       feature: displayLabel,
       displayLabel,
@@ -599,7 +617,7 @@ export class ExecuteTestComponent {
       resultUrl: this.optionalString(raw?.resultUrl),
       fetchingArtifacts: Boolean(raw?.fetchingArtifacts),
       artifactError: this.optionalString(raw?.artifactError),
-      createdAtIso: this.optionalString(raw?.createdAtIso),
+      createdAtIso,
       weeklyExecutionId: this.optionalString(raw?.weeklyExecutionId)
     };
   }
@@ -734,7 +752,6 @@ export class ExecuteTestComponent {
         run.testJsonUrl = resp?.url;
         run.fetchingArtifacts = false;
         run.artifactError = undefined;
-        this.releases.update(run.id, { testJsonUrl: run.testJsonUrl });
         if (resp?.data) {
           this.testResults.saveResultRun({
             name: jsonKey,
@@ -756,19 +773,18 @@ export class ExecuteTestComponent {
             status: this.mapWeeklyStatus(run.status)
           });
         }
-        this.saveRuns();
+        this.persistRun(run);
       },
       error: () => {
         run.fetchingArtifacts = false;
         run.artifactError = 'Could not fetch test.json (check AWS access or key).';
-        this.saveRuns();
+        this.persistRun(run);
       }
     });
 
     this.testResults.getResultLink(htmlKey).subscribe({
       next: resp => {
         run.resultUrl = resp?.url;
-        this.releases.update(run.id, { resultUrl: run.resultUrl, stage: 'delivered' });
         this.syncRunToWeeklyBoard(run, {
           resultsLink: run.resultUrl,
           status: this.mapWeeklyStatus(run.status)
@@ -799,7 +815,7 @@ export class ExecuteTestComponent {
             }
           });
         }
-        this.saveRuns();
+        this.persistRun(run);
       },
       error: () => {
         // ignore
@@ -893,7 +909,7 @@ export class ExecuteTestComponent {
         next: resp => {
           if (resp?.id && resp.id !== run.weeklyExecutionId) {
             run.weeklyExecutionId = resp.id;
-            this.saveRuns();
+            this.persistRun(run);
           }
         },
         error: () => {

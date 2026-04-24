@@ -54,6 +54,56 @@ export interface WeeklyStatusResponse {
   rows: WeeklyStatusBoardRow[];
 }
 
+export interface AutomationKpiMetrics {
+  healthIndex: number;
+  passRate: number;
+  averageCoverage: number;
+  executionCompletion: number;
+  successRatio: number;
+  totalSuites: number;
+  executedSuites: number;
+  successfulSuites: number;
+  failedSuites: number;
+  activeSuites: number;
+  pendingSuites: number;
+  totalAutomated: number;
+  totalPassed: number;
+  totalFailed: number;
+}
+
+export interface KpiMetricCard {
+  label: string;
+  value: string;
+  detail: string;
+  trend: string;
+  trendTone: 'positive' | 'negative' | 'neutral';
+}
+
+export interface PlatformSnapshot {
+  platform: string;
+  suites: number;
+  executedSuites: number;
+  failedSuites: number;
+  passRate: number;
+  coverage: number;
+}
+
+export interface AutomationKpiResponse {
+  weekStart: string;
+  weekEnd: string;
+  label: string;
+  currentMetrics: AutomationKpiMetrics;
+  previousMetrics: AutomationKpiMetrics;
+  metricCards: KpiMetricCard[];
+  platformSnapshots: PlatformSnapshot[];
+  strengths: WeeklyStatusBoardRow[];
+  watchlist: WeeklyStatusBoardRow[];
+  lastUpdatedLabel: string;
+  postureLabel: string;
+  postureCopy: string;
+  hasActiveRuns: boolean;
+}
+
 export interface WeeklyExecutionUpsertPayload {
   id?: string;
   boardId?: string;

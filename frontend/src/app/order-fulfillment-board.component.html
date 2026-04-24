@@ -76,9 +76,14 @@
           <div>
             <p class="release-board-panel__eyebrow mb-1">Release queue</p>
             <h2 class="release-board-panel__title mb-1">Release timeline</h2>
-            <div class="release-board-panel__copy">Release ticket, QA, selection, environment, results, Jira, and notes in one operational table.</div>
+            <div class="release-board-panel__copy">Release ticket, QA, selection, environment, results, Jira, and notes pulled from the shared execute-test database.</div>
           </div>
-          <span class="badge rounded-pill text-bg-light">{{ totalReleases }} entries</span>
+          <div class="d-flex align-items-center gap-2">
+            <span class="badge rounded-pill text-bg-light">{{ totalReleases }} entries</span>
+            <button type="button" class="btn btn-outline-success btn-sm" (click)="refreshBoard()">
+              Refresh
+            </button>
+          </div>
         </div>
 
         <table class="table table-bordered table-hover align-middle release-board-table">
@@ -94,19 +99,25 @@
             </tr>
           </thead>
           <tbody>
-            <tr *ngIf="!releases().length">
-              <td colspan="8" class="text-center text-muted py-4">No releases yet.</td>
+            <tr *ngIf="loading">
+              <td colspan="7" class="text-center text-muted py-4">Loading release-board entries from the database...</td>
             </tr>
-            <tr *ngFor="let order of releases()" class="release-board-table__row">
+            <tr *ngIf="!loading && loadError">
+              <td colspan="7" class="text-center text-danger py-4">{{ loadError }}</td>
+            </tr>
+            <tr *ngIf="!loading && !loadError && !releases.length">
+              <td colspan="7" class="text-center text-muted py-4">No release entries are stored in the database yet.</td>
+            </tr>
+            <tr *ngFor="let order of releases" class="release-board-table__row">
               <td>#{{ order.id }}</td>
-              <td>{{ order.qa || '—' }}</td>
+              <td>{{ order.who || '—' }}</td>
               <td>
-                <div>{{ order.feature || '—' }}</div>
+                <div>{{ selectionLabel(order) }}</div>
                 <div class="mt-1">
                   <span class="release-board-chip">{{ runTypeLabel(order) }}</span>
                 </div>
               </td>
-              <td>{{ order.environment || '—' }}</td>
+              <td>{{ order.env || '—' }}</td>
               <td style="min-width: 140px; white-space: nowrap;">
                 <ng-container *ngIf="order.resultUrl; else noResult">
                   <a [href]="order.resultUrl" target="_blank" rel="noreferrer" class="release-board-link">test-results</a>

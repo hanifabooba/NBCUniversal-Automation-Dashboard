@@ -1,7 +1,6 @@
 import { Component } from '@angular/core';
 import { Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { NgIf, NgClass } from '@angular/common';
-import { RoleService } from './role.service';
 
 @Component({
   selector: 'app-root',
@@ -13,13 +12,7 @@ export class AppComponent {
   title = 'NBCuniversal Automation Dashboard';
   menuOpen = false;
 
-  constructor(public roles: RoleService, private router: Router) {}
-
-  logout() {
-    this.roles.clearUser();
-    this.router.navigate(['/']);
-    this.menuOpen = false;
-  }
+  constructor(private router: Router) {}
 
   toggleMenu() {
     this.menuOpen = !this.menuOpen;

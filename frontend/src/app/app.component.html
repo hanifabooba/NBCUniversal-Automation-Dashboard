@@ -4,7 +4,11 @@
       <button class="btn btn-outline-light d-lg-none" type="button" (click)="toggleMenu()">
         <i class="bi" [ngClass]="menuOpen ? 'bi-x-lg' : 'bi-list'"></i>
       </button>
-      <a class="app-header__brand d-flex align-items-center text-white justify-content-start" routerLink="/">
+      <a
+        class="app-header__brand d-flex align-items-center text-white justify-content-start"
+        href="https://qa-dashboard.otsops.com/dashboard"
+        (click)="menuOpen = false"
+      >
         <div class="app-header__title">{{ title }}</div>
       </a>
       <nav class="nav nav-pills gap-2 flex-wrap mobile-nav" [class.open]="menuOpen">
@@ -41,25 +45,6 @@
         <i class="bi bi-speedometer2 me-1"></i>
         Results Dashboard
       </a>
-        <a
-          *ngIf="!roles.isLoggedIn()"
-          class="nav-link text-white"
-          routerLink="/login"
-          routerLinkActive="active"
-          (click)="menuOpen = false"
-        >
-          <i class="bi bi-shield-lock-fill me-1"></i>
-          Login
-        </a>
-        <button
-          *ngIf="roles.isLoggedIn()"
-          class="nav-link text-white btn btn-link p-0 border-0"
-          type="button"
-          (click)="logout()"
-        >
-          <i class="bi bi-box-arrow-right me-1"></i>
-          Logout
-        </button>
       </nav>
     </div>
   </header>

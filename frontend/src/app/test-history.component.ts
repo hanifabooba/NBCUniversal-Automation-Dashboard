@@ -2,6 +2,7 @@ import { Component, computed, signal, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { CartService } from './cart.service';
+import { ExecuteTestRunsService, SharedExecuteTestRun } from './execute-test-runs.service';
 import { OrderProduct } from './order.model';
 
 interface OrderCategory {
@@ -10,20 +11,7 @@ interface OrderCategory {
   description: string;
 }
 
-interface RunCard {
-  id: number;
-  status: string;
-  who: string;
-  when: string;
-  date: string;
-  env: string;
-  feature: string;
-  runType?: 'tag' | 'test-cases';
-  featureFiles?: string[];
-  branch?: string;
-  comment?: string;
-  jira?: string;
-}
+type RunCard = SharedExecuteTestRun;
 
 @Component({
   standalone: true,
@@ -113,7 +101,7 @@ export class TestHistoryComponent implements OnInit, OnDestroy {
 
   readonly cartCount = this.cartService.itemCount;
 
-  constructor(route: ActivatedRoute, private cartService: CartService) {
+  constructor(route: ActivatedRoute, private cartService: CartService, private executeTestRuns: ExecuteTestRunsService) {
     route.queryParamMap.subscribe(params => {
       const incoming = params.get('category');
       if (incoming && this.categories.some(c => c.id === incoming)) {
@@ -214,25 +202,25 @@ export class TestHistoryComponent implements OnInit, OnDestroy {
   }
 
   private loadRuns(): void {
-    try {
-      const raw = localStorage.getItem('jenkins-runs');
-      const runs: RunCard[] = raw ? JSON.parse(raw) : [];
-      const grouped: Record<string, RunCard[]> = {};
-      this.categories.forEach(c => (grouped[c.id] = []));
-      runs.forEach(run => {
-        const envKey = this.normalizeEnv(run.env);
-        if (grouped[envKey]) {
-          grouped[envKey].push(run);
-        }
-      });
-      // Limit cards per env
-      Object.keys(grouped).forEach(k => {
-        grouped[k] = grouped[k].slice(0, 5);
-      });
-      this.runsByEnv = grouped;
-    } catch {
-      this.runsByEnv = {};
-    }
+    this.executeTestRuns.listRuns(100).subscribe({
+      next: runs => {
+        const grouped: Record<string, RunCard[]> = {};
+        this.categories.forEach(c => (grouped[c.id] = []));
+        runs.forEach(run => {
+          const envKey = this.normalizeEnv(run.env);
+          if (grouped[envKey]) {
+            grouped[envKey].push(run);
+          }
+        });
+        Object.keys(grouped).forEach(key => {
+          grouped[key] = grouped[key].slice(0, 5);
+        });
+        this.runsByEnv = grouped;
+      },
+      error: () => {
+        this.runsByEnv = {};
+      }
+    });
   }
 
   private setCurrentCategoryName(categoryId: string): void {

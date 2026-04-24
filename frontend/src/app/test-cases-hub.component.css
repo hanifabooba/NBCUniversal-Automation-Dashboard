@@ -204,6 +204,61 @@
   background: linear-gradient(180deg, #ffffff 0%, rgba(232, 245, 233, 0.9) 100%);
 }
 
+.cases-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1050;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.25rem;
+  background:
+    radial-gradient(circle at top, rgba(102, 187, 106, 0.16), transparent 32%),
+    rgba(8, 18, 30, 0.56);
+  backdrop-filter: blur(8px);
+}
+
+.cases-modal {
+  width: min(100%, 460px);
+  margin: auto;
+  border-radius: 30px;
+  padding: 1.6rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 28px 60px rgba(8, 18, 30, 0.28);
+  text-align: center;
+  background:
+    radial-gradient(circle at top right, rgba(102, 187, 106, 0.22), transparent 32%),
+    linear-gradient(135deg, rgba(49, 82, 119, 0.98), rgba(85, 115, 146, 0.95));
+}
+
+.cases-modal__eyebrow {
+  color: rgba(255, 255, 255, 0.8);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.cases-modal__title {
+  margin: 0.45rem 0 0;
+  color: #ffffff;
+  font-size: 1.35rem;
+  font-weight: 700;
+}
+
+.cases-modal__copy {
+  margin: 0.85rem 0 0;
+  color: rgba(255, 255, 255, 0.86);
+  font-size: 0.97rem;
+  line-height: 1.6;
+}
+
+.cases-modal__actions {
+  display: flex;
+  justify-content: center;
+  margin-top: 1.2rem;
+}
+
 @media (min-width: 992px) {
   .cases-hero {
     grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.95fr);

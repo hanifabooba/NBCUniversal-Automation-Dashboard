@@ -1,11 +1,13 @@
 import { Injectable } from '@angular/core';
 import { HttpClient, HttpErrorResponse, HttpParams, HttpResponse } from '@angular/common/http';
-import { catchError, map, Observable, throwError } from 'rxjs';
+import { catchError, forkJoin, map, Observable, throwError } from 'rxjs';
 import {
+  AutomationKpiResponse,
   WeeklyExecutionUpsertPayload,
   WeeklyStatusFilter,
   WeeklyStatusResponse
 } from './weekly-status.models';
+import { buildAutomationKpiResponseFromWeeklyBoards, getWorkingWeekRange } from './weekly-status.utils';
 
 @Injectable({ providedIn: 'root' })
 export class WeeklyStatusService {
@@ -19,6 +21,23 @@ export class WeeklyStatusService {
       suite: filter.suite || '',
       executionType: filter.executionType || ''
     });
+  }
+
+  getAutomationKpi(filter: WeeklyStatusFilter): Observable<AutomationKpiResponse> {
+    return this.getJson<AutomationKpiResponse>('/api/automation/kpi', {
+      weekStart: filter.weekStart,
+      weekEnd: filter.weekEnd,
+      platform: filter.platform || '',
+      suite: filter.suite || '',
+      executionType: filter.executionType || ''
+    }).pipe(
+      catchError(err => {
+        if (this.shouldFallbackToWeeklyStatus(err)) {
+          return this.buildAutomationKpiFallback(filter);
+        }
+        return throwError(() => err);
+      })
+    );
   }
 
   runWeeklyJobs(weekStart: string, weekEnd: string): Observable<{ weekStart: string; weekEnd: string }> {
@@ -93,10 +112,11 @@ export class WeeklyStatusService {
       return {} as T;
     }
 
+    const contentType = response.headers.get('content-type') || '';
     try {
       return JSON.parse(rawBody) as T;
     } catch {
-      throw this.createUnexpectedResponseError(response.status, rawBody);
+      throw this.createUnexpectedResponseError(response.status, rawBody, contentType, response.url || urlOrUnknown());
     }
   }
 
@@ -112,11 +132,7 @@ export class WeeklyStatusService {
             message: typeof parsed?.message === 'string' && parsed.message.trim() ? parsed.message.trim() : err.message
           };
         } catch {
-          const lowerBody = rawBody.toLowerCase();
-          const message =
-            lowerBody.startsWith('<!doctype') || lowerBody.startsWith('<html')
-              ? 'The weekly status service returned an unexpected response.'
-              : rawBody;
+          const message = this.buildUnexpectedResponseMessage(rawBody, err.headers?.get('content-type') || '', err.url || urlOrUnknown());
           return {
             status: err.status,
             error: rawBody,
@@ -128,7 +144,10 @@ export class WeeklyStatusService {
       return {
         status: err.status,
         error: err.error,
-        message: err.message
+        message:
+          typeof err.message === 'string' && err.message.includes('Http failure during parsing')
+            ? this.buildUnexpectedResponseMessage('', err.headers?.get('content-type') || '', err.url || urlOrUnknown())
+            : err.message
       };
     }
 
@@ -139,16 +158,89 @@ export class WeeklyStatusService {
     };
   }
 
-  private createUnexpectedResponseError(status: number, rawBody: string): { status: number; error: string; message: string } {
-    const lowerBody = rawBody.toLowerCase();
-    const message =
-      lowerBody.startsWith('<!doctype') || lowerBody.startsWith('<html')
-        ? 'The weekly status service returned an unexpected response.'
-        : 'The weekly status service returned invalid JSON.';
+  private createUnexpectedResponseError(
+    status: number,
+    rawBody: string,
+    contentType: string,
+    url: string
+  ): { status: number; error: string; message: string; url: string; contentType: string } {
+    const message = this.buildUnexpectedResponseMessage(rawBody, contentType, url);
     return {
       status,
       error: rawBody,
-      message
+      message,
+      url,
+      contentType
     };
   }
+
+  private buildUnexpectedResponseMessage(rawBody: string, contentType: string, url: string): string {
+    const normalizedBody = rawBody.toLowerCase();
+    const normalizedType = String(contentType || '').toLowerCase();
+    const endpointLabel = this.describeAutomationEndpoint(url);
+    const looksLikeHtml =
+      normalizedType.includes('text/html') ||
+      normalizedBody.startsWith('<!doctype') ||
+      normalizedBody.startsWith('<html');
+    const looksLikeAngularShell =
+      looksLikeHtml &&
+      (normalizedBody.includes('<app-root') ||
+        normalizedBody.includes('<base href=') ||
+        normalizedBody.includes('loading nbcuniversal'));
+
+    if (looksLikeAngularShell) {
+      return `The ${endpointLabel} returned the frontend app shell instead of JSON for ${url}. This usually means the reverse proxy is routing the API request to index.html instead of the backend service.`;
+    }
+
+    if (looksLikeHtml) {
+      return `The ${endpointLabel} returned HTML instead of JSON for ${url}. Please verify the reverse proxy and backend routing for this API path.`;
+    }
+
+    return `The ${endpointLabel} returned invalid JSON.`;
+  }
+
+  private describeAutomationEndpoint(url: string): string {
+    if (url.includes('/api/automation/kpi')) {
+      return 'automation KPI API';
+    }
+    if (url.includes('/api/automation/weekly-status')) {
+      return 'weekly status API';
+    }
+    return 'automation API';
+  }
+
+  private shouldFallbackToWeeklyStatus(err: unknown): boolean {
+    return Number((err as { status?: number } | null)?.status ?? 0) === 404;
+  }
+
+  private buildAutomationKpiFallback(filter: WeeklyStatusFilter): Observable<AutomationKpiResponse> {
+    const previousAnchor = new Date(`${filter.weekStart}T12:00:00`);
+    if (Number.isNaN(previousAnchor.getTime())) {
+      return throwError(() => ({
+        status: 500,
+        error: null,
+        message: 'Unable to derive the previous working week for KPI fallback.'
+      }));
+    }
+
+    previousAnchor.setDate(previousAnchor.getDate() - 7);
+    const previousRange = getWorkingWeekRange(previousAnchor);
+
+    return forkJoin({
+      currentBoard: this.getWeeklyStatus(filter),
+      previousBoard: this.getWeeklyStatus({
+        weekStart: previousRange.weekStart,
+        weekEnd: previousRange.weekEnd,
+        platform: filter.platform,
+        suite: filter.suite,
+        executionType: filter.executionType
+      })
+    }).pipe(
+      map(({ currentBoard, previousBoard }) => buildAutomationKpiResponseFromWeeklyBoards(currentBoard, previousBoard))
+    );
+  }
+}
+
+function urlOrUnknown(): string {
+  return '/api/automation/weekly-status';
 }

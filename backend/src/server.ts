@@ -6,19 +6,18 @@ import bcrypt from 'bcryptjs';
 import nodemailer from 'nodemailer';
 import fs from 'fs';
 import path from 'path';
-import { db, stageToStatus } from './db';
+import { db, getDatabaseHealthInfo, stageToStatus } from './db';
 import crypto from 'crypto';
 import zlib from 'zlib';
 import {
   WEEKLY_AUTOMATION_JOBS,
-  WEEKLY_STATUS_BOARD_DEFINITIONS,
   WeeklyAutomationJobDefinition,
+  WeeklyBoardDefinition,
+  getWorkingWeekRange,
   WeeklyExecutionType,
   WeeklyJobStatus,
   WeeklyPlatform,
   WeeklySuite,
-  findWeeklyBoardDefinitionById,
-  findWeeklyBoardDefinitionByTag,
   findWeeklyJobDefinitionById,
   resolveWorkingWeekRange
 } from './weekly-status';
@@ -27,12 +26,21 @@ const app = express();
 app.use(cors());
 const apiBodyLimit = process.env.API_BODY_LIMIT || '50mb';
 app.use(express.json({ limit: apiBodyLimit }));
-app.get('/api/health', (_req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
 type OrderStage = 'orders' | 'preparing' | 'assign' | 'inroute' | 'delivered';
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret';
 const APP_PORT = Number(process.env.PORT || 3000);
 const INTERNAL_BASE_URL = process.env.INTERNAL_BASE_URL || `http://127.0.0.1:${APP_PORT}`;
+
+app.get('/api/health', (_req, res) =>
+  res.json({
+    ok: true,
+    time: new Date().toISOString(),
+    service: 'nbcuniversal-backend',
+    port: APP_PORT,
+    database: getDatabaseHealthInfo()
+  })
+);
 
 interface DbUser {
   id: number;
@@ -505,6 +513,61 @@ async function fetchXmlSummary(candidateKeys: string[]): Promise<{ summary: { to
   return null;
 }
 
+function parseResultHtmlSummary(html: string): { total: number; passed: number; failed: number; skipped: number } | null {
+  const readCount = (pattern: RegExp): number => {
+    const match = html.match(pattern);
+    return match ? Number(match[1]) : 0;
+  };
+
+  const passed = readCount(/<b>(\d+)<\/b>\s*tests\s*passed/i);
+  const failed = readCount(/<b>(\d+)<\/b>\s*tests\s*failed/i);
+  const skipped = readCount(/<b>(\d+)<\/b>\s*skipped/i);
+  const total = passed + failed + skipped;
+
+  return total > 0 ? { total, passed, failed, skipped } : null;
+}
+
+async function fetchHtmlSummary(resultUrl?: string | null): Promise<{ summary: { total: number; passed: number; failed: number; skipped: number }; html: string } | null> {
+  const url = String(resultUrl || '').trim();
+  if (!url) return null;
+
+  try {
+    const resp = await fetchWithTimeout(
+      url,
+      {
+        headers: {
+          Accept: 'text/html,application/xhtml+xml'
+        }
+      },
+      DEFAULT_RESULT_INGEST_TIMEOUT_MS
+    );
+    if (!resp.ok) return null;
+
+    const html = await resp.text();
+    const summary = parseResultHtmlSummary(html);
+    return summary ? { summary, html } : null;
+  } catch {
+    return null;
+  }
+}
+
+function buildReportSummaryCandidateKeys(prefix: string): string[] {
+  return Array.from(
+    new Set(
+      [
+        `${prefix}/testng-results.xml`,
+        `${prefix}/test-output/testng-results.xml`,
+        `${prefix}/TEST-TestSuite.xml`,
+        `${prefix}/test-output/TEST-TestSuite.xml`,
+        `${prefix}/junitreports/TEST-TestSuite.xml`,
+        `${prefix}/test-output/junitreports/TEST-nbc_WP.cucumberOptions.TestRunner.xml`,
+        `${prefix}/junitreports/TEST-nbc_WP.cucumberOptions.TestRunner.xml`,
+        `${prefix}/cucumber-junit.xml`
+      ].flatMap(candidate => expandDateVariants(candidate))
+    )
+  );
+}
+
 function unzipFirstEntry(buffer: Buffer): Buffer | null {
   // Find End of Central Directory (search backwards up to 64KB as per spec)
   const eocdSignature = 0x06054b50;
@@ -638,6 +701,36 @@ type StoredResultRun = {
   reportZip?: Buffer;
 };
 
+type StoredExecuteTestRun = {
+  id: number;
+  status: string;
+  who: string;
+  when: string;
+  date: string;
+  env: string;
+  feature: string;
+  displayLabel: string;
+  runType: 'tag' | 'test-cases';
+  featureFiles?: string[];
+  browser?: string;
+  deviceType?: string;
+  branch?: string;
+  comment?: string;
+  jira?: string;
+  queueUrl?: string;
+  buildUrl?: string;
+  buildNumber?: number;
+  queueId?: number;
+  note?: string;
+  prefix?: string;
+  testJsonUrl?: string;
+  resultUrl?: string;
+  artifactError?: string;
+  createdAtIso: string;
+  updatedAtIso?: string;
+  weeklyExecutionId?: string;
+};
+
 type StoredWeeklyExecution = {
   id: string;
   boardId: string;
@@ -697,6 +790,141 @@ type WeeklyStatusSummary = {
   failed: number;
   passRate: number;
 };
+
+type AutomationKpiMetrics = {
+  healthIndex: number;
+  passRate: number;
+  averageCoverage: number;
+  executionCompletion: number;
+  successRatio: number;
+  totalSuites: number;
+  executedSuites: number;
+  successfulSuites: number;
+  failedSuites: number;
+  activeSuites: number;
+  pendingSuites: number;
+  totalAutomated: number;
+  totalPassed: number;
+  totalFailed: number;
+};
+
+type KpiMetricCard = {
+  label: string;
+  value: string;
+  detail: string;
+  trend: string;
+  trendTone: 'positive' | 'negative' | 'neutral';
+};
+
+type PlatformSnapshot = {
+  platform: string;
+  suites: number;
+  executedSuites: number;
+  failedSuites: number;
+  passRate: number;
+  coverage: number;
+};
+
+type AutomationKpiResponse = {
+  weekStart: string;
+  weekEnd: string;
+  label: string;
+  currentMetrics: AutomationKpiMetrics;
+  previousMetrics: AutomationKpiMetrics;
+  metricCards: KpiMetricCard[];
+  platformSnapshots: PlatformSnapshot[];
+  strengths: WeeklyBoardRow[];
+  watchlist: WeeklyBoardRow[];
+  lastUpdatedLabel: string;
+  postureLabel: string;
+  postureCopy: string;
+  hasActiveRuns: boolean;
+};
+
+function parseStoredStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map(entry => String(entry)).filter(Boolean);
+  }
+
+  const raw = String(value ?? '').trim();
+  if (!raw) return [];
+
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.map(entry => String(entry)).filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+
+function mapWeeklyBoardDefinitionRow(row: any): WeeklyBoardDefinition {
+  return {
+    id: String(row.id),
+    sn: toFiniteNumber(row.sn),
+    platform: String(row.platform) as WeeklyPlatform,
+    platformLabel: String(row.platformLabel),
+    suite: String(row.suite) as WeeklySuite,
+    suiteLabel: String(row.suiteLabel),
+    testCases: toFiniteNumber(row.testCases),
+    applicationCoverage:
+      row.applicationCoverage === null || row.applicationCoverage === undefined
+        ? null
+        : toFiniteNumber(row.applicationCoverage),
+    automationScripts: toFiniteNumber(row.automationScripts),
+    coveragePercent: toFiniteNumber(row.coveragePercent),
+    supportedExecutionTypes: parseStoredStringArray(row.supportedExecutionTypes) as WeeklyExecutionType[],
+    tagAliases: parseStoredStringArray(row.tagAliases)
+  };
+}
+
+function listWeeklyBoardDefinitionsFromDb(): WeeklyBoardDefinition[] {
+  const rows = db
+    .prepare(
+      `SELECT *
+       FROM weekly_board_definitions
+       ORDER BY sn ASC, platformLabel ASC, suiteLabel ASC`
+    )
+    .all() as any[];
+  return rows.map(mapWeeklyBoardDefinitionRow);
+}
+
+function getWeeklyBoardDefinitionByIdFromDb(boardId?: string | null): WeeklyBoardDefinition | undefined {
+  if (!boardId) return undefined;
+  const row = db.prepare('SELECT * FROM weekly_board_definitions WHERE id = ?').get(boardId) as any;
+  return row ? mapWeeklyBoardDefinitionRow(row) : undefined;
+}
+
+function normalizeWeeklyBoardTag(tag?: string | null): string {
+  return String(tag || '').trim().toLowerCase();
+}
+
+function inferWeeklyBoardPlatform(tag: string, deviceType?: string | null): WeeklyPlatform {
+  const normalizedDevice = String(deviceType || '').toLowerCase();
+  if (tag.includes('ios')) return 'IOS';
+  if (tag.includes('@mw') || normalizedDevice.includes('mobile')) return 'MOBILE_WEB';
+  return 'WEB';
+}
+
+function inferWeeklyBoardSuite(tag: string): WeeklySuite {
+  if (tag.includes('regression')) return 'REGRESSION';
+  if (tag.includes('sanity')) return 'SANITY';
+  return 'UNIFIED';
+}
+
+function findWeeklyBoardDefinitionByTagFromDb(tag?: string | null, deviceType?: string | null): WeeklyBoardDefinition | undefined {
+  const normalizedTag = normalizeWeeklyBoardTag(tag);
+  if (!normalizedTag) return undefined;
+
+  const definitions = listWeeklyBoardDefinitionsFromDb();
+  const aliasMatch = definitions.find(def =>
+    def.tagAliases.some(alias => normalizeWeeklyBoardTag(alias) === normalizedTag)
+  );
+  if (aliasMatch) return aliasMatch;
+
+  const platform = inferWeeklyBoardPlatform(normalizedTag, deviceType);
+  const suite = inferWeeklyBoardSuite(normalizedTag);
+  return definitions.find(def => def.platform === platform && def.suite === suite);
+}
 
 function loadEnvHealth(): EnvRun[] {
   ensureEnvHealthFile();
@@ -817,6 +1045,200 @@ function resolveStoredResultUrl(run: Pick<StoredResultRun, 'key' | 'resultUrl' |
     return `/api/results/result-html?key=${encodeURIComponent(run.key)}`;
   }
   return run.resultUrl || undefined;
+}
+
+function parseExecuteTestFeatureFiles(value: unknown): string[] | undefined {
+  if (Array.isArray(value)) {
+    const normalized = value.map(item => String(item ?? '').trim()).filter(Boolean);
+    return normalized.length ? Array.from(new Set(normalized)) : undefined;
+  }
+  if (typeof value === 'string' && value.trim()) {
+    try {
+      const parsed = JSON.parse(value);
+      return parseExecuteTestFeatureFiles(parsed);
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+function mapExecuteTestRunRow(row: any): StoredExecuteTestRun {
+  const featureFiles = parseExecuteTestFeatureFiles(row.featureFiles);
+  const displayLabel = row.displayLabel ? String(row.displayLabel) : row.feature ? String(row.feature) : 'Unknown selection';
+  return {
+    id: toFiniteNumber(row.id),
+    status: String(row.status || 'unknown'),
+    who: String(row.who || 'Manual QA'),
+    when: String(row.timeLabel || ''),
+    date: String(row.dateLabel || ''),
+    env: String(row.environment || ''),
+    feature: String(row.feature || displayLabel),
+    displayLabel,
+    runType: String(row.runType || (featureFiles?.length ? 'test-cases' : 'tag')) === 'test-cases' ? 'test-cases' : 'tag',
+    featureFiles,
+    browser: row.browser ? String(row.browser) : undefined,
+    deviceType: row.deviceType ? String(row.deviceType) : undefined,
+    branch: row.branch ? String(row.branch) : undefined,
+    comment: row.comment ? String(row.comment) : undefined,
+    jira: row.jira ? String(row.jira) : undefined,
+    queueUrl: row.queueUrl ? String(row.queueUrl) : undefined,
+    buildUrl: row.buildUrl ? String(row.buildUrl) : undefined,
+    buildNumber: row.buildNumber === null || row.buildNumber === undefined ? undefined : toFiniteNumber(row.buildNumber),
+    queueId: row.queueId === null || row.queueId === undefined ? undefined : toFiniteNumber(row.queueId),
+    note: row.note ? String(row.note) : undefined,
+    prefix: row.runPrefix ? String(row.runPrefix) : undefined,
+    testJsonUrl: row.testJsonUrl ? String(row.testJsonUrl) : undefined,
+    resultUrl: row.resultUrl ? String(row.resultUrl) : undefined,
+    artifactError: row.artifactError ? String(row.artifactError) : undefined,
+    createdAtIso: String(row.createdAt || new Date().toISOString()),
+    updatedAtIso: row.updatedAt ? String(row.updatedAt) : undefined,
+    weeklyExecutionId: row.weeklyExecutionId ? String(row.weeklyExecutionId) : undefined
+  };
+}
+
+function listExecuteTestRuns(limit = 20): StoredExecuteTestRun[] {
+  const safeLimit = Math.max(1, Math.min(200, toFiniteNumber(limit, 20)));
+  const rows = db
+    .prepare(
+      `SELECT id, status, who, timeLabel, dateLabel, environment, feature, displayLabel, runType, featureFiles,
+              browser, deviceType, branch, comment, jira, queueUrl, buildUrl, buildNumber, queueId, note,
+              runPrefix, testJsonUrl, resultUrl, artifactError, createdAt, updatedAt, weeklyExecutionId
+       FROM execute_test_runs
+       ORDER BY datetime(createdAt) DESC, id DESC
+       LIMIT ?`
+    )
+    .all(safeLimit) as any[];
+  return rows.map(mapExecuteTestRunRow);
+}
+
+function getExecuteTestRun(id: number): StoredExecuteTestRun | undefined {
+  const row = db
+    .prepare(
+      `SELECT id, status, who, timeLabel, dateLabel, environment, feature, displayLabel, runType, featureFiles,
+              browser, deviceType, branch, comment, jira, queueUrl, buildUrl, buildNumber, queueId, note,
+              runPrefix, testJsonUrl, resultUrl, artifactError, createdAt, updatedAt, weeklyExecutionId
+       FROM execute_test_runs
+       WHERE id = ?`
+    )
+    .get(id) as any;
+  return row ? mapExecuteTestRunRow(row) : undefined;
+}
+
+function normalizeExecuteTestRunPayload(body: any): StoredExecuteTestRun {
+  const id = toNullableNumber(body?.id);
+  if (id === null) {
+    throw new Error('Run id is required.');
+  }
+
+  const featureFiles = parseExecuteTestFeatureFiles(body?.featureFiles);
+  const createdAtIsoCandidate = normalizeOptionalString(body?.createdAtIso);
+  const createdAtIso =
+    createdAtIsoCandidate && !Number.isNaN(Date.parse(createdAtIsoCandidate)) ? createdAtIsoCandidate : new Date().toISOString();
+  const displayLabel =
+    normalizeOptionalString(body?.displayLabel) ||
+    normalizeOptionalString(body?.feature) ||
+    (featureFiles?.length ? featureFiles.join(', ') : 'Unknown selection');
+
+  return {
+    id,
+    status: normalizeOptionalString(body?.status) || 'unknown',
+    who: normalizeOptionalString(body?.who) || 'Manual QA',
+    when: normalizeOptionalString(body?.when) || '',
+    date: normalizeOptionalString(body?.date) || '',
+    env: normalizeOptionalString(body?.env) || '',
+    feature: normalizeOptionalString(body?.feature) || displayLabel,
+    displayLabel,
+    runType: String(body?.runType) === 'test-cases' ? 'test-cases' : 'tag',
+    featureFiles,
+    browser: normalizeOptionalString(body?.browser),
+    deviceType: normalizeOptionalString(body?.deviceType),
+    branch: normalizeOptionalString(body?.branch),
+    comment: normalizeOptionalString(body?.comment),
+    jira: normalizeOptionalString(body?.jira),
+    queueUrl: normalizeOptionalString(body?.queueUrl),
+    buildUrl: normalizeOptionalString(body?.buildUrl),
+    buildNumber: toNullableNumber(body?.buildNumber) ?? undefined,
+    queueId: toNullableNumber(body?.queueId) ?? undefined,
+    note: normalizeOptionalString(body?.note),
+    prefix: normalizeOptionalString(body?.prefix),
+    testJsonUrl: normalizeOptionalString(body?.testJsonUrl),
+    resultUrl: normalizeOptionalString(body?.resultUrl),
+    artifactError: normalizeOptionalString(body?.artifactError),
+    createdAtIso,
+    updatedAtIso: new Date().toISOString(),
+    weeklyExecutionId: normalizeOptionalString(body?.weeklyExecutionId)
+  };
+}
+
+function upsertExecuteTestRunToDb(run: StoredExecuteTestRun): StoredExecuteTestRun {
+  db.prepare(
+    `INSERT INTO execute_test_runs (
+       id, status, who, timeLabel, dateLabel, environment, feature, displayLabel, runType, featureFiles,
+       browser, deviceType, branch, comment, jira, queueUrl, buildUrl, buildNumber, queueId, note,
+       runPrefix, testJsonUrl, resultUrl, artifactError, createdAt, updatedAt, weeklyExecutionId
+     ) VALUES (
+       @id, @status, @who, @timeLabel, @dateLabel, @environment, @feature, @displayLabel, @runType, @featureFiles,
+       @browser, @deviceType, @branch, @comment, @jira, @queueUrl, @buildUrl, @buildNumber, @queueId, @note,
+       @runPrefix, @testJsonUrl, @resultUrl, @artifactError, @createdAt, @updatedAt, @weeklyExecutionId
+     )
+     ON CONFLICT(id) DO UPDATE SET
+       status = @status,
+       who = @who,
+       timeLabel = @timeLabel,
+       dateLabel = @dateLabel,
+       environment = @environment,
+       feature = @feature,
+       displayLabel = @displayLabel,
+       runType = @runType,
+       featureFiles = CASE WHEN @featureFiles IS NULL THEN execute_test_runs.featureFiles ELSE @featureFiles END,
+       browser = COALESCE(@browser, execute_test_runs.browser),
+       deviceType = COALESCE(@deviceType, execute_test_runs.deviceType),
+       branch = COALESCE(@branch, execute_test_runs.branch),
+       comment = COALESCE(@comment, execute_test_runs.comment),
+       jira = COALESCE(@jira, execute_test_runs.jira),
+       queueUrl = COALESCE(@queueUrl, execute_test_runs.queueUrl),
+       buildUrl = COALESCE(@buildUrl, execute_test_runs.buildUrl),
+       buildNumber = COALESCE(@buildNumber, execute_test_runs.buildNumber),
+       queueId = COALESCE(@queueId, execute_test_runs.queueId),
+       note = COALESCE(@note, execute_test_runs.note),
+       runPrefix = COALESCE(@runPrefix, execute_test_runs.runPrefix),
+       testJsonUrl = COALESCE(@testJsonUrl, execute_test_runs.testJsonUrl),
+       resultUrl = COALESCE(@resultUrl, execute_test_runs.resultUrl),
+       artifactError = CASE WHEN @artifactError IS NULL THEN execute_test_runs.artifactError ELSE @artifactError END,
+       updatedAt = @updatedAt,
+       weeklyExecutionId = COALESCE(@weeklyExecutionId, execute_test_runs.weeklyExecutionId)`
+  ).run({
+    id: run.id,
+    status: run.status,
+    who: run.who,
+    timeLabel: run.when,
+    dateLabel: run.date,
+    environment: run.env,
+    feature: run.feature,
+    displayLabel: run.displayLabel,
+    runType: run.runType,
+    featureFiles: run.featureFiles?.length ? JSON.stringify(run.featureFiles) : null,
+    browser: run.browser ?? null,
+    deviceType: run.deviceType ?? null,
+    branch: run.branch ?? null,
+    comment: run.comment ?? null,
+    jira: run.jira ?? null,
+    queueUrl: run.queueUrl ?? null,
+    buildUrl: run.buildUrl ?? null,
+    buildNumber: run.buildNumber ?? null,
+    queueId: run.queueId ?? null,
+    note: run.note ?? null,
+    runPrefix: run.prefix ?? null,
+    testJsonUrl: run.testJsonUrl ?? null,
+    resultUrl: run.resultUrl ?? null,
+    artifactError: run.artifactError ?? null,
+    createdAt: run.createdAtIso,
+    updatedAt: run.updatedAtIso || new Date().toISOString(),
+    weeklyExecutionId: run.weeklyExecutionId ?? null
+  });
+
+  return getExecuteTestRun(run.id) || run;
 }
 
 function countStatuses(data: any[]): { passed: number; failed: number; skipped: number; total: number } {
@@ -964,6 +1386,181 @@ function deriveStoredResultUrl(key: string, providedResultUrl?: string, existing
   return presignS3GetUrl(htmlKey) || s3UrlForKey(htmlKey);
 }
 
+function extractResultRunPrefix(key?: string | null): string {
+  const normalized = String(key || '')
+    .trim()
+    .replace(/(\.zip|\.gz)$/i, '');
+  if (!normalized) return '';
+
+  return normalized
+    .replace(/\/?(test|cucumber)\.json$/i, '')
+    .replace(/\/result\.html$/i, '')
+    .replace(/\/report\.zip$/i, '')
+    .replace(/\/+$/, '');
+}
+
+function buildResultJsonCandidateKeys(prefix: string): string[] {
+  if (!prefix) return [];
+
+  return Array.from(
+    new Set(
+      expandDateVariants(`${prefix}/test.json`).flatMap(candidate => {
+        const variants = [candidate, `${candidate}.gz`, `${candidate}.zip`];
+        const cucumberCandidate = candidate.replace(/test\.json$/i, 'cucumber.json');
+        variants.push(cucumberCandidate, `${cucumberCandidate}.gz`, `${cucumberCandidate}.zip`);
+        return variants;
+      })
+    )
+  );
+}
+
+function buildStoredResultRunSummary(run: Partial<StoredResultRun> | null | undefined):
+  | { passed: number; failed: number; skipped: number; total: number }
+  | null {
+  if (!run) return null;
+
+  const passed = toFiniteNumber(run.passed);
+  const failed = toFiniteNumber(run.failed);
+  const skipped = toFiniteNumber(run.skipped);
+  const total = toFiniteNumber(run.total, passed + failed + skipped);
+
+  if (total <= 0 && passed + failed + skipped <= 0) {
+    return null;
+  }
+
+  return { passed, failed, skipped, total };
+}
+
+function isSuspiciousResultRunSummary(
+  summary: { passed: number; failed: number; skipped: number; total: number } | null | undefined
+): boolean {
+  if (!summary) return true;
+  return summary.total <= 1 && summary.passed + summary.failed <= 1;
+}
+
+async function fetchResultJsonArtifacts(candidateKeys: string[]): Promise<{ data: any[]; usedKey: string; url: string } | null> {
+  for (const candidate of candidateKeys) {
+    if (!candidate) continue;
+
+    const url = presignS3GetUrl(candidate) || s3UrlForKey(candidate);
+
+    try {
+      const resp = await fetchWithTimeout(url, {}, DEFAULT_RESULT_INGEST_TIMEOUT_MS);
+      if (!resp.ok) continue;
+
+      const contentType = resp.headers.get('content-type') || '';
+      if (contentType.includes('json')) {
+        const raw = await resp.json();
+        const data = normalizeTestResults(raw);
+        if (Array.isArray(data) && data.length) {
+          return { data, usedKey: candidate, url };
+        }
+        continue;
+      }
+
+      const buffer = Buffer.from(await resp.arrayBuffer());
+      const parsed = parseBufferAsJson(buffer);
+      if (parsed?.data?.length) {
+        return { data: parsed.data, usedKey: candidate, url };
+      }
+    } catch {
+      // ignore and continue
+    }
+  }
+
+  return null;
+}
+
+function resultRunNeedsArtifactHydration(run: Partial<StoredResultRun> | null | undefined): boolean {
+  if (!run?.key) return false;
+  return isSuspiciousResultRunSummary(buildStoredResultRunSummary(run));
+}
+
+async function hydrateStoredResultRunFromArtifacts(run: StoredResultRun): Promise<StoredResultRun> {
+  if (!run.key) return run;
+
+  const prefix = extractResultRunPrefix(run.key);
+  if (!prefix) return run;
+
+  const currentSummary = buildStoredResultRunSummary(run);
+  const resultUrl = deriveStoredResultUrl(run.key, run.resultUrl, run.resultUrl);
+  const jsonArtifacts = await fetchResultJsonArtifacts(buildResultJsonCandidateKeys(prefix));
+
+  if (jsonArtifacts) {
+    const jsonSummary = countStatuses(jsonArtifacts.data);
+    if (jsonSummary.total > 1) {
+      upsertResultRunToDb({
+        id: run.id,
+        name: run.name,
+        key: run.key,
+        resultUrl,
+        createdAt: run.createdAt,
+        expiresAt: run.expiresAt,
+        data: jsonArtifacts.data
+      });
+
+      await hydrateStoredResultHtml({
+        id: run.id,
+        key: run.key,
+        name: run.name,
+        createdAt: run.createdAt,
+        resultUrl,
+        existingResultHtml: Boolean(run.hasResultHtml)
+      });
+
+      return findStoredResultRunByKeys([run.key], false) || run;
+    }
+  }
+
+  const xmlSummary = await fetchXmlSummary(buildReportSummaryCandidateKeys(prefix));
+  if (xmlSummary && (!currentSummary || xmlSummary.summary.total > currentSummary.total)) {
+    upsertResultRunToDb({
+      id: run.id,
+      name: run.name,
+      key: run.key,
+      resultUrl,
+      createdAt: run.createdAt,
+      expiresAt: run.expiresAt,
+      passed: xmlSummary.summary.passed,
+      failed: xmlSummary.summary.failed,
+      skipped: xmlSummary.summary.skipped,
+      total: xmlSummary.summary.total
+    });
+
+    await hydrateStoredResultHtml({
+      id: run.id,
+      key: run.key,
+      name: run.name,
+      createdAt: run.createdAt,
+      resultUrl,
+      existingResultHtml: Boolean(run.hasResultHtml)
+    });
+
+    return findStoredResultRunByKeys([run.key], false) || run;
+  }
+
+  const htmlSummary = await fetchHtmlSummary(resultUrl);
+  if (htmlSummary && (!currentSummary || htmlSummary.summary.total > currentSummary.total)) {
+    upsertResultRunToDb({
+      id: run.id,
+      name: run.name,
+      key: run.key,
+      resultUrl,
+      createdAt: run.createdAt,
+      expiresAt: run.expiresAt,
+      resultHtml: htmlSummary.html,
+      passed: htmlSummary.summary.passed,
+      failed: htmlSummary.summary.failed,
+      skipped: htmlSummary.summary.skipped,
+      total: htmlSummary.summary.total
+    });
+
+    return findStoredResultRunByKeys([run.key], false) || run;
+  }
+
+  return run;
+}
+
 async function hydrateStoredResultHtml(input: {
   id: string;
   key: string;
@@ -1064,9 +1661,9 @@ function listWeeklyExecutions(weekStart: string, weekEnd: string): StoredWeeklyE
 
 function upsertWeeklyExecutionToDb(run: StoredWeeklyExecution): StoredWeeklyExecution {
   const boardDef =
-    findWeeklyBoardDefinitionById(run.boardId) ||
-    findWeeklyBoardDefinitionById(findWeeklyJobDefinitionById(run.jobId)?.boardId) ||
-    findWeeklyBoardDefinitionByTag(run.tag, run.deviceType);
+    getWeeklyBoardDefinitionByIdFromDb(run.boardId) ||
+    getWeeklyBoardDefinitionByIdFromDb(findWeeklyJobDefinitionById(run.jobId)?.boardId) ||
+    findWeeklyBoardDefinitionByTagFromDb(run.tag, run.deviceType);
   if (!boardDef) {
     throw new Error(`Unable to resolve weekly board definition for ${run.boardId || run.tag || run.id}`);
   }
@@ -1170,9 +1767,9 @@ function buildWeeklyExecutionSeed(input: {
   executedWeekEnd: string;
 }): StoredWeeklyExecution {
   const boardDef =
-    findWeeklyBoardDefinitionById(input.boardId) ||
-    findWeeklyBoardDefinitionById(findWeeklyJobDefinitionById(input.jobId)?.boardId) ||
-    findWeeklyBoardDefinitionByTag(input.tag, input.deviceType);
+    getWeeklyBoardDefinitionByIdFromDb(input.boardId) ||
+    getWeeklyBoardDefinitionByIdFromDb(findWeeklyJobDefinitionById(input.jobId)?.boardId) ||
+    findWeeklyBoardDefinitionByTagFromDb(input.tag, input.deviceType);
   if (!boardDef) {
     throw new Error('Unable to determine weekly status board row for the requested execution.');
   }
@@ -1220,6 +1817,7 @@ function buildWeeklyStatusResponse(
   const normalizedPlatform = String(filters.platform || '').toUpperCase();
   const normalizedSuite = String(filters.suite || '').toUpperCase();
   const normalizedExecutionType = String(filters.executionType || '').toUpperCase();
+  const boardDefinitions = listWeeklyBoardDefinitionsFromDb();
 
   const filteredExecutions = executions.filter(execution => {
     if (normalizedPlatform && normalizedPlatform !== 'ALL' && execution.platform !== normalizedPlatform) return false;
@@ -1235,7 +1833,7 @@ function buildWeeklyStatusResponse(
     }
   }
 
-  const rows = WEEKLY_STATUS_BOARD_DEFINITIONS
+  const rows = boardDefinitions
     .filter(def => {
       if (normalizedPlatform && normalizedPlatform !== 'ALL' && def.platform !== normalizedPlatform) return false;
       if (normalizedSuite && normalizedSuite !== 'ALL' && def.suite !== normalizedSuite) return false;
@@ -1279,6 +1877,285 @@ function buildWeeklyStatusResponse(
   summary.passRate = computePassRate(summary.passed, summary.failed, 0);
 
   return { summary, rows };
+}
+
+function emptyAutomationKpiMetrics(): AutomationKpiMetrics {
+  return {
+    healthIndex: 0,
+    passRate: 0,
+    averageCoverage: 0,
+    executionCompletion: 0,
+    successRatio: 0,
+    totalSuites: 0,
+    executedSuites: 0,
+    successfulSuites: 0,
+    failedSuites: 0,
+    activeSuites: 0,
+    pendingSuites: 0,
+    totalAutomated: 0,
+    totalPassed: 0,
+    totalFailed: 0
+  };
+}
+
+function buildAutomationKpiMetricsFromBoard(summary: WeeklyStatusSummary, rows: WeeklyBoardRow[]): AutomationKpiMetrics {
+  if (!rows.length) {
+    return emptyAutomationKpiMetrics();
+  }
+
+  const executedRows = rows.filter(row => String(row.jobStatus || '').toUpperCase() !== 'NOT_RUN');
+  const completedRows = rows.filter(row => ['SUCCESS', 'FAILED'].includes(String(row.jobStatus || '').toUpperCase()));
+  const successfulRows = rows.filter(row => String(row.jobStatus || '').toUpperCase() === 'SUCCESS');
+  const failedRows = rows.filter(row => String(row.jobStatus || '').toUpperCase() === 'FAILED');
+  const activeRows = rows.filter(row => ['QUEUED', 'RUNNING'].includes(String(row.jobStatus || '').toUpperCase()));
+  const pendingRows = rows.filter(row => String(row.jobStatus || '').toUpperCase() === 'NOT_RUN');
+  const averageCoverage = rows.reduce((total, row) => total + Number(row.coveragePercent || 0), 0) / rows.length;
+  const executionCompletion = rows.length ? (executedRows.length / rows.length) * 100 : 0;
+  const successRatio = completedRows.length ? (successfulRows.length / completedRows.length) * 100 : 0;
+  const passRate = Number(summary.passRate || 0);
+  const healthIndex = Math.round(
+    Math.min(
+      100,
+      passRate * 0.45 +
+        averageCoverage * 0.25 +
+        executionCompletion * 0.2 +
+        successRatio * 0.1
+    )
+  );
+
+  return {
+    healthIndex,
+    passRate,
+    averageCoverage,
+    executionCompletion,
+    successRatio,
+    totalSuites: rows.length,
+    executedSuites: executedRows.length,
+    successfulSuites: successfulRows.length,
+    failedSuites: failedRows.length,
+    activeSuites: activeRows.length,
+    pendingSuites: pendingRows.length,
+    totalAutomated: Number(summary.totalAutomated || 0),
+    totalPassed: Number(summary.passed || 0),
+    totalFailed: Number(summary.failed || 0)
+  };
+}
+
+function buildKpiMetricTrend(
+  current: number,
+  previous: number,
+  options: { unit: string; positiveIsHigher: boolean }
+): Pick<KpiMetricCard, 'trend' | 'trendTone'> {
+  if (!Number.isFinite(previous) || previous === 0) {
+    return {
+      trend: 'Baseline unavailable from previous week',
+      trendTone: 'neutral'
+    };
+  }
+
+  const delta = current - previous;
+  if (Math.abs(delta) < 0.05) {
+    return {
+      trend: 'Flat versus previous week',
+      trendTone: 'neutral'
+    };
+  }
+
+  const directionUp = delta > 0;
+  const better = options.positiveIsHigher ? directionUp : !directionUp;
+  const arrow = directionUp ? 'Up' : 'Down';
+  return {
+    trend: `${arrow} ${Math.abs(delta).toFixed(1)}${options.unit} versus previous week`,
+    trendTone: better ? 'positive' : 'negative'
+  };
+}
+
+function buildAutomationKpiMetricCards(current: AutomationKpiMetrics, previous: AutomationKpiMetrics): KpiMetricCard[] {
+  return [
+    {
+      label: 'Health index',
+      value: `${current.healthIndex}/100`,
+      detail: 'Weighted from pass rate, script coverage, execution completion, and successful suite closes.',
+      ...buildKpiMetricTrend(current.healthIndex, previous.healthIndex, {
+        unit: ' pts',
+        positiveIsHigher: true
+      })
+    },
+    {
+      label: 'Weekly pass rate',
+      value: `${current.passRate.toFixed(1)}%`,
+      detail: `${current.totalPassed} passed vs ${current.totalFailed} failed in the selected scope.`,
+      ...buildKpiMetricTrend(current.passRate, previous.passRate, {
+        unit: '%',
+        positiveIsHigher: true
+      })
+    },
+    {
+      label: 'Execution completion',
+      value: `${current.executedSuites}/${current.totalSuites}`,
+      detail: `${current.executionCompletion.toFixed(0)}% of suites produced a signal this week.`,
+      ...buildKpiMetricTrend(current.executionCompletion, previous.executionCompletion, {
+        unit: '%',
+        positiveIsHigher: true
+      })
+    },
+    {
+      label: 'Average coverage',
+      value: `${current.averageCoverage.toFixed(1)}%`,
+      detail: `${current.totalAutomated} automated scripts are represented in the current board mix.`,
+      ...buildKpiMetricTrend(current.averageCoverage, previous.averageCoverage, {
+        unit: '%',
+        positiveIsHigher: true
+      })
+    }
+  ];
+}
+
+function buildAutomationKpiPlatformSnapshots(rows: WeeklyBoardRow[]): PlatformSnapshot[] {
+  const grouped = new Map<string, WeeklyBoardRow[]>();
+  for (const row of rows) {
+    const key = row.platform || 'Unknown';
+    if (!grouped.has(key)) {
+      grouped.set(key, []);
+    }
+    grouped.get(key)?.push(row);
+  }
+
+  return Array.from(grouped.entries())
+    .map(([platform, platformRows]) => {
+      const executed = platformRows.filter(row => String(row.jobStatus || '').toUpperCase() !== 'NOT_RUN');
+      const failed = platformRows.filter(row => String(row.jobStatus || '').toUpperCase() === 'FAILED');
+      const passRate = executed.length
+        ? executed.reduce((total, row) => total + Number(row.passingRate || 0), 0) / executed.length
+        : 0;
+      const coverage =
+        platformRows.reduce((total, row) => total + Number(row.coveragePercent || 0), 0) / platformRows.length;
+
+      return {
+        platform,
+        suites: platformRows.length,
+        executedSuites: executed.length,
+        failedSuites: failed.length,
+        passRate,
+        coverage
+      };
+    })
+    .sort((left, right) => right.passRate - left.passRate);
+}
+
+function buildAutomationKpiStrengthRows(rows: WeeklyBoardRow[]): WeeklyBoardRow[] {
+  return [...rows]
+    .filter(row => String(row.jobStatus || '').toUpperCase() === 'SUCCESS' || Number(row.passed || 0) > 0)
+    .sort((left, right) => {
+      const passDiff = Number(right.passingRate || 0) - Number(left.passingRate || 0);
+      if (passDiff !== 0) return passDiff;
+      const coverageDiff = Number(right.coveragePercent || 0) - Number(left.coveragePercent || 0);
+      if (coverageDiff !== 0) return coverageDiff;
+      return Number(right.passed || 0) - Number(left.passed || 0);
+    })
+    .slice(0, 3);
+}
+
+function buildAutomationKpiWatchlistRows(rows: WeeklyBoardRow[]): WeeklyBoardRow[] {
+  const riskScore = (row: WeeklyBoardRow) => {
+    const status = String(row.jobStatus || '').toUpperCase();
+    const statusPenalty =
+      status === 'FAILED' ? 70 : status === 'RUNNING' ? 35 : status === 'QUEUED' ? 28 : status === 'NOT_RUN' ? 18 : 0;
+    const passPenalty = status === 'NOT_RUN' ? 12 : Math.max(0, 100 - Number(row.passingRate || 0));
+    const failurePenalty = Number(row.failed || 0) * 2.5;
+    const coveragePenalty = Math.max(0, 65 - Number(row.coveragePercent || 0)) * 0.35;
+    return statusPenalty + passPenalty + failurePenalty + coveragePenalty;
+  };
+
+  return [...rows]
+    .filter(row => riskScore(row) > 0)
+    .sort((left, right) => riskScore(right) - riskScore(left))
+    .slice(0, 4);
+}
+
+function findAutomationKpiLastUpdatedLabel(rows: WeeklyBoardRow[]): string {
+  const timestamps = rows
+    .map(row => row.executedAt)
+    .filter((value): value is string => !!value)
+    .map(value => new Date(value))
+    .filter(value => !Number.isNaN(value.getTime()))
+    .sort((left, right) => right.getTime() - left.getTime());
+
+  if (!timestamps.length) {
+    return 'Awaiting first execution';
+  }
+
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit'
+  }).format(timestamps[0]);
+}
+
+function buildAutomationKpiPostureLabel(metrics: AutomationKpiMetrics): string {
+  const { healthIndex, failedSuites, activeSuites } = metrics;
+  if (activeSuites > 0) return 'Live movement';
+  if (failedSuites > 0 && healthIndex < 70) return 'Needs recovery';
+  if (healthIndex >= 85) return 'Release-ready';
+  if (healthIndex >= 70) return 'Stable with watch items';
+  if (healthIndex >= 55) return 'Watch closely';
+  return 'At risk';
+}
+
+function buildAutomationKpiPostureCopy(metrics: AutomationKpiMetrics): string {
+  const { failedSuites, activeSuites, pendingSuites, successfulSuites } = metrics;
+  if (activeSuites > 0) {
+    return `${activeSuites} suite${activeSuites === 1 ? '' : 's'} still ${activeSuites === 1 ? 'is' : 'are'} in flight. Keep this board open until the signal settles.`;
+  }
+  if (failedSuites > 0) {
+    return `${failedSuites} suite${failedSuites === 1 ? '' : 's'} failed in the selected window. Release confidence is constrained until the watchlist items are cleared.`;
+  }
+  if (pendingSuites > 0) {
+    return `${successfulSuites} suite${successfulSuites === 1 ? '' : 's'} completed cleanly, but ${pendingSuites} still ${pendingSuites === 1 ? 'has' : 'have'} no signal for the week.`;
+  }
+  return 'The current automation mix is healthy across pass rate, coverage, and suite completion. This is the best single-screen readiness view we can produce with today’s data.';
+}
+
+async function buildAutomationKpiResponse(filter: {
+  weekStart?: string;
+  weekEnd?: string;
+  platform?: string;
+  suite?: string;
+  executionType?: string;
+}): Promise<AutomationKpiResponse> {
+  const currentRange = resolveWorkingWeekRange(filter.weekStart, filter.weekEnd);
+  const previousAnchor = new Date(`${currentRange.weekStart}T12:00:00`);
+  previousAnchor.setDate(previousAnchor.getDate() - 7);
+  const previousRange = getWorkingWeekRange(previousAnchor);
+  const filters = {
+    platform: filter.platform,
+    suite: filter.suite,
+    executionType: filter.executionType
+  };
+
+  const currentExecutions = await refreshWeeklyExecutionsForRange(currentRange.weekStart, currentRange.weekEnd);
+  const previousExecutions = await refreshWeeklyExecutionsForRange(previousRange.weekStart, previousRange.weekEnd);
+  const currentBoard = buildWeeklyStatusResponse(currentRange.weekStart, currentRange.weekEnd, currentExecutions, filters);
+  const previousBoard = buildWeeklyStatusResponse(previousRange.weekStart, previousRange.weekEnd, previousExecutions, filters);
+  const currentMetrics = buildAutomationKpiMetricsFromBoard(currentBoard.summary, currentBoard.rows);
+  const previousMetrics = buildAutomationKpiMetricsFromBoard(previousBoard.summary, previousBoard.rows);
+
+  return {
+    weekStart: currentRange.weekStart,
+    weekEnd: currentRange.weekEnd,
+    label: currentRange.label,
+    currentMetrics,
+    previousMetrics,
+    metricCards: buildAutomationKpiMetricCards(currentMetrics, previousMetrics),
+    platformSnapshots: buildAutomationKpiPlatformSnapshots(currentBoard.rows),
+    strengths: buildAutomationKpiStrengthRows(currentBoard.rows),
+    watchlist: buildAutomationKpiWatchlistRows(currentBoard.rows),
+    lastUpdatedLabel: findAutomationKpiLastUpdatedLabel(currentBoard.rows),
+    postureLabel: buildAutomationKpiPostureLabel(currentMetrics),
+    postureCopy: buildAutomationKpiPostureCopy(currentMetrics),
+    hasActiveRuns: currentBoard.rows.some(row => ['QUEUED', 'RUNNING'].includes(String(row.jobStatus || '').toUpperCase()))
+  };
 }
 
 function s3UrlForKey(key: string) {
@@ -1652,18 +2529,19 @@ app.post('/api/results/fetch-json', async (req, res) => {
 
   const cachedRun = findStoredResultRunByKeys(candidateKeys, true);
   if (cachedRun) {
-    const cachedData = Array.isArray(cachedRun.data) ? cachedRun.data : [];
-    const cachedSummary =
-      cachedRun.total || cachedRun.passed || cachedRun.failed || cachedRun.skipped
-        ? {
-            total: Number(cachedRun.total || 0),
-            passed: Number(cachedRun.passed || 0),
-            failed: Number(cachedRun.failed || 0),
-            skipped: Number(cachedRun.skipped || 0)
-          }
-        : cachedData.length
-          ? countStatuses(cachedData)
-          : undefined;
+    let resolvedRun = cachedRun;
+    let cachedData = Array.isArray(resolvedRun.data) ? resolvedRun.data : [];
+    let cachedSummary = buildStoredResultRunSummary(resolvedRun) || (cachedData.length ? countStatuses(cachedData) : undefined);
+
+    if (!cachedData.length && isSuspiciousResultRunSummary(cachedSummary)) {
+      try {
+        resolvedRun = await hydrateStoredResultRunFromArtifacts(cachedRun);
+        cachedData = Array.isArray(resolvedRun.data) ? resolvedRun.data : [];
+        cachedSummary = buildStoredResultRunSummary(resolvedRun) || (cachedData.length ? countStatuses(cachedData) : undefined);
+      } catch {
+        resolvedRun = cachedRun;
+      }
+    }
 
     if (cachedData.length || cachedSummary) {
       if (cachedData.length) {
@@ -1672,11 +2550,11 @@ app.post('/api/results/fetch-json', async (req, res) => {
       }
 
       return res.json({
-        key: cachedRun.key || baseKey,
+        key: resolvedRun.key || baseKey,
         saved: true,
         data: cachedData,
-        resultUrl: resolveStoredResultUrl(cachedRun),
-        runId: cachedRun.id,
+        resultUrl: resolveStoredResultUrl(resolvedRun),
+        runId: resolvedRun.id,
         summary: cachedSummary,
         note: cachedData.length ? 'db-cache' : 'db-summary'
       });
@@ -2222,12 +3100,27 @@ app.get('/api/results/result-url', async (req, res) => {
 });
 
 // Result runs storage (full test.json with result link)
-app.get('/api/result-runs', (_req, res) => {
+app.get('/api/result-runs', async (_req, res) => {
   const now = Date.now();
   const runs = loadResultRuns(false)
     .filter(r => !r.expiresAt || Date.parse(r.expiresAt) > now)
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  res.json(runs);
+
+  const refreshedRuns = await Promise.all(
+    runs.map(async run => {
+      if (!resultRunNeedsArtifactHydration(run)) {
+        return run;
+      }
+
+      try {
+        return await hydrateStoredResultRunFromArtifacts(run);
+      } catch {
+        return run;
+      }
+    })
+  );
+
+  res.json(refreshedRuns);
 });
 
 app.post('/api/result-runs', async (req, res) => {
@@ -2284,6 +3177,26 @@ app.post('/api/result-runs', async (req, res) => {
   res.status(201).json(entry);
 });
 
+app.get('/api/execute-test-runs', (req, res) => {
+  try {
+    const limit = req.query.limit ? Number(req.query.limit) : 20;
+    return res.json(listExecuteTestRuns(limit));
+  } catch (err: any) {
+    console.error('Execute test runs list error', err);
+    return res.status(500).json({ message: 'Unable to load execute test runs', error: String(err?.message || err) });
+  }
+});
+
+app.post('/api/execute-test-runs', (req, res) => {
+  try {
+    const run = normalizeExecuteTestRunPayload(req.body);
+    const saved = upsertExecuteTestRunToDb(run);
+    return res.status(201).json(saved);
+  } catch (err: any) {
+    return res.status(400).json({ message: err?.message || 'Unable to save execute test run' });
+  }
+});
+
 // Accept a summary-only payload (from Jenkins) when JSON artifacts are missing.
 app.post('/api/results/upload-summary', async (req, res) => {
   const { key, name, resultUrl, passed, failed, skipped, total, createdAt } = req.body as {
@@ -2328,6 +3241,27 @@ app.post('/api/results/upload-summary', async (req, res) => {
     skipped: safeSkipped,
     total: safeTotal
   });
+  let savedRun =
+    findStoredResultRunByKeys([key], false) || {
+      id,
+      name: name || existing?.name || key,
+      key,
+      resultUrl: resultLink,
+      createdAt: createdAtIso,
+      passed: safePassed,
+      failed: safeFailed,
+      skipped: safeSkipped,
+      total: safeTotal
+    };
+
+  if (resultRunNeedsArtifactHydration(savedRun)) {
+    try {
+      savedRun = await hydrateStoredResultRunFromArtifacts(savedRun as StoredResultRun);
+    } catch {
+      // Keep the summary-only row if artifact hydration fails here.
+    }
+  }
+
   await hydrateStoredResultHtml({
     id,
     key,
@@ -2401,23 +3335,63 @@ async function awaitWithTimeout<T>(promise: Promise<T>, timeoutMs: number, messa
   }
 }
 
+function extractSetCookieHeaders(headers: Headers): string[] {
+  const headerBag = headers as Headers & {
+    raw?: () => Record<string, string[]>;
+    getSetCookie?: () => string[];
+  };
+
+  if (typeof headerBag.getSetCookie === 'function') {
+    const cookies = headerBag.getSetCookie();
+    if (Array.isArray(cookies) && cookies.length) {
+      return cookies;
+    }
+  }
+
+  if (typeof headerBag.raw === 'function') {
+    const rawHeaders = headerBag.raw();
+    const rawCookies = rawHeaders['set-cookie'];
+    if (Array.isArray(rawCookies) && rawCookies.length) {
+      return rawCookies;
+    }
+  }
+
+  const combinedHeader = headers.get('set-cookie');
+  if (!combinedHeader) {
+    return [];
+  }
+
+  return combinedHeader
+    .split(/,(?=\s*[^;,=\s]+\s*=)/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
 async function fetchJenkinsCrumb(origin: string, authHeader: string): Promise<{ crumbHeader: Record<string, string>; crumbCookies: string }> {
   let crumbHeader: Record<string, string> = {};
   let crumbCookies = '';
   try {
     const crumbResp = await fetchJenkinsWithTimeout(`${origin}/crumbIssuer/api/json`, {
-      headers: { Authorization: authHeader }
+      headers: {
+        Authorization: authHeader,
+        Accept: 'application/json'
+      }
     });
     if (crumbResp.ok) {
       const crumbJson = (await crumbResp.json()) as { crumbRequestField?: string; crumb?: string };
       if (crumbJson.crumbRequestField && crumbJson.crumb) {
         crumbHeader = { [crumbJson.crumbRequestField]: crumbJson.crumb };
       }
-      const rawHeaders = (crumbResp.headers as any)?.raw?.();
-      const setCookie = rawHeaders ? rawHeaders['set-cookie'] : undefined;
-      if (Array.isArray(setCookie) && setCookie.length) {
-        crumbCookies = setCookie.map((c: string) => c.split(';')[0]).join('; ');
+      const setCookie = extractSetCookieHeaders(crumbResp.headers);
+      if (setCookie.length) {
+        crumbCookies = setCookie.map((c) => c.split(';')[0]).join('; ');
       }
+    } else {
+      const bodySnippet = (await crumbResp.text()).slice(0, 1000);
+      console.warn('[Jenkins crumb] non-200', crumbResp.status, {
+        statusText: crumbResp.statusText,
+        bodySnippet
+      });
     }
   } catch (err) {
     console.warn('Crumb fetch failed, proceeding without crumb:', err);
@@ -2451,7 +3425,6 @@ async function triggerJenkinsBuildRequest(input: {
   const targetUrl = new URL(defaultJobUrl);
   const origin = `${targetUrl.protocol}//${targetUrl.host}`;
   const authHeader = 'Basic ' + Buffer.from(`${user}:${token}`).toString('base64');
-  const { crumbHeader, crumbCookies } = await fetchJenkinsCrumb(origin, authHeader);
 
   const queryParams = new URLSearchParams();
   if (triggerToken) queryParams.append('token', triggerToken);
@@ -2463,16 +3436,39 @@ async function triggerJenkinsBuildRequest(input: {
     if (v !== undefined && v !== null) bodyParams.append(k, v);
   });
 
-  const triggerResp = await fetchJenkinsWithTimeout(buildUrl, {
-    method: 'POST',
-    headers: {
-      Authorization: authHeader,
-      'Content-Type': 'application/x-www-form-urlencoded',
-      ...crumbHeader,
-      ...(crumbCookies ? { cookie: crumbCookies } : {})
-    },
-    body: bodyParams.toString()
-  });
+  const submitTrigger = async () => {
+    const { crumbHeader, crumbCookies } = await fetchJenkinsCrumb(origin, authHeader);
+    return fetchJenkinsWithTimeout(buildUrl, {
+      method: 'POST',
+      headers: {
+        Authorization: authHeader,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        ...crumbHeader,
+        ...(crumbCookies ? { cookie: crumbCookies } : {})
+      },
+      body: bodyParams.toString()
+    });
+  };
+
+  let triggerResp = await submitTrigger();
+
+  if (triggerResp.status === 403) {
+    const firstAttemptBody = await triggerResp.text();
+    if (/No valid crumb was included in the request/i.test(firstAttemptBody)) {
+      console.warn('[Jenkins trigger] crumb validation failed, retrying once with fresh crumb');
+      triggerResp = await submitTrigger();
+    } else {
+      const err = new Error('Failed to trigger Jenkins') as Error & {
+        status?: number;
+        statusText?: string;
+        details?: string;
+      };
+      err.status = triggerResp.status;
+      err.statusText = triggerResp.statusText;
+      err.details = firstAttemptBody.slice(0, 4000);
+      throw err;
+    }
+  }
 
   if (!triggerResp.ok) {
     const text = await triggerResp.text();
@@ -2666,12 +3662,9 @@ async function resolveWeeklyExecutionArtifacts(runPrefix: string): Promise<Parti
     patch.resultsLink = resolvedUrl;
   }
 
-  if (!cachedRun) {
-    return patch;
-  }
-
-  const summary =
-    cachedRun.total || cachedRun.passed || cachedRun.failed || cachedRun.skipped
+  const cachedDataCount = cachedRun && Array.isArray(cachedRun.data) ? cachedRun.data.length : 0;
+  let summary =
+    cachedRun && (cachedRun.total || cachedRun.passed || cachedRun.failed || cachedRun.skipped)
       ? {
           passed: toFiniteNumber(cachedRun.passed),
           failed: toFiniteNumber(cachedRun.failed),
@@ -2681,9 +3674,34 @@ async function resolveWeeklyExecutionArtifacts(runPrefix: string): Promise<Parti
             toFiniteNumber(cachedRun.passed) + toFiniteNumber(cachedRun.failed) + toFiniteNumber(cachedRun.skipped)
           )
         }
-      : Array.isArray(cachedRun.data) && cachedRun.data.length
+      : cachedRun && Array.isArray(cachedRun.data) && cachedRun.data.length
         ? countStatuses(cachedRun.data)
         : null;
+
+  const shouldTryXmlSummary =
+    !summary ||
+    (cachedDataCount === 0 &&
+      summary.total <= 1 &&
+      toFiniteNumber(summary.passed) + toFiniteNumber(summary.failed) <= 1);
+
+  if (shouldTryXmlSummary) {
+    const xmlCandidates = buildReportSummaryCandidateKeys(prefix);
+    const xmlSummary = await fetchXmlSummary(xmlCandidates);
+    if (xmlSummary && (!summary || xmlSummary.summary.total > summary.total)) {
+      summary = xmlSummary.summary;
+      upsertResultRunToDb({
+        id: cachedRun?.id || `${Date.now()}`,
+        name: cachedRun?.name || jsonKey,
+        key: cachedRun?.key || jsonKey,
+        resultUrl: resolveStoredResultUrl(cachedRun) || patch.resultsLink,
+        createdAt: cachedRun?.createdAt || new Date().toISOString(),
+        passed: summary.passed,
+        failed: summary.failed,
+        skipped: summary.skipped,
+        total: summary.total
+      });
+    }
+  }
 
   if (summary) {
     patch.passed = summary.passed;
@@ -2693,6 +3711,25 @@ async function resolveWeeklyExecutionArtifacts(runPrefix: string): Promise<Parti
   }
 
   return patch;
+}
+
+function weeklyExecutionNeedsArtifactHydration(execution: StoredWeeklyExecution): boolean {
+  const status = String(execution.status || '').toUpperCase();
+  if (!['SUCCESS', 'FAILED'].includes(status)) {
+    return false;
+  }
+
+  if (!execution.runPrefix && !execution.buildUrl) {
+    return false;
+  }
+
+  const missingSummary = toFiniteNumber(execution.passed) + toFiniteNumber(execution.failed) === 0;
+  const suspiciousSingleResultSummary =
+    toFiniteNumber(execution.totalAutomated) <= 1 &&
+    toFiniteNumber(execution.passed) + toFiniteNumber(execution.failed) <= 1 &&
+    toFiniteNumber(execution.testCases) > 1;
+  const missingResultLink = !execution.resultsLink;
+  return missingSummary || suspiciousSingleResultSummary || missingResultLink;
 }
 
 async function syncWeeklyExecution(execution: StoredWeeklyExecution): Promise<StoredWeeklyExecution> {
@@ -2755,6 +3792,38 @@ async function syncWeeklyExecution(execution: StoredWeeklyExecution): Promise<St
     }
   }
 
+  if (weeklyExecutionNeedsArtifactHydration(current)) {
+    let runPrefix = current.runPrefix;
+    let buildNumber = current.buildNumber;
+
+    if (!runPrefix && current.buildUrl) {
+      try {
+        const build = await fetchJenkinsBuildData(current.buildUrl);
+        if (build?.runPrefix) {
+          runPrefix = String(build.runPrefix);
+        }
+        if (build?.number) {
+          buildNumber = toFiniteNumber(build.number);
+        }
+      } catch {
+        // Keep the current row as-is if Jenkins build metadata cannot be refreshed here.
+      }
+    }
+
+    if (runPrefix) {
+      const artifactPatch = await resolveWeeklyExecutionArtifacts(runPrefix);
+      if (Object.keys(artifactPatch).length || runPrefix !== current.runPrefix || buildNumber !== current.buildNumber) {
+        return (
+          saveWeeklyExecutionPatch(current.id, {
+            runPrefix,
+            buildNumber,
+            ...artifactPatch
+          }) || current
+        );
+      }
+    }
+  }
+
   return current;
 }
 
@@ -2763,14 +3832,18 @@ async function refreshWeeklyExecutionsForRange(weekStart: string, weekEnd: strin
   const activeExecutions = executions.filter(
     execution => execution.status === 'QUEUED' || execution.status === 'RUNNING'
   );
+  const artifactPendingExecutions = executions.filter(execution => weeklyExecutionNeedsArtifactHydration(execution));
+  const executionsToRefresh = Array.from(
+    new Map([...activeExecutions, ...artifactPendingExecutions].map(execution => [execution.id, execution])).values()
+  );
 
-  if (!activeExecutions.length) {
+  if (!executionsToRefresh.length) {
     return executions;
   }
 
   try {
     await awaitWithTimeout(
-      Promise.allSettled(activeExecutions.map(execution => syncWeeklyExecution(execution))),
+      Promise.allSettled(executionsToRefresh.map(execution => syncWeeklyExecution(execution))),
       DEFAULT_WEEKLY_STATUS_REFRESH_TIMEOUT_MS,
       `Weekly status refresh timed out after ${DEFAULT_WEEKLY_STATUS_REFRESH_TIMEOUT_MS}ms`
     );
@@ -2778,7 +3851,7 @@ async function refreshWeeklyExecutionsForRange(weekStart: string, weekEnd: strin
     console.warn('Weekly status refresh fallback', {
       weekStart,
       weekEnd,
-      activeCount: activeExecutions.length,
+      activeCount: executionsToRefresh.length,
       message: String(err?.message || err)
     });
   }
@@ -3252,6 +4325,22 @@ app.get('/api/automation/weekly-status', async (req, res) => {
   }
 });
 
+app.get('/api/automation/kpi', async (req, res) => {
+  try {
+    const payload = await buildAutomationKpiResponse({
+      weekStart: req.query.weekStart as string | undefined,
+      weekEnd: req.query.weekEnd as string | undefined,
+      platform: req.query.platform as string | undefined,
+      suite: req.query.suite as string | undefined,
+      executionType: req.query.executionType as string | undefined
+    });
+    return res.json(payload);
+  } catch (err: any) {
+    console.error('Automation KPI fetch error', err);
+    return res.status(500).json({ message: 'Error loading automation KPI data', error: String(err?.message || err) });
+  }
+});
+
 app.post('/api/automation/weekly-status/run', async (req, res) => {
   try {
     const body = req.body as { weekStart?: string; weekEnd?: string };
@@ -3406,7 +4495,14 @@ app.get('/api/automation/weekly-status/export', async (req, res) => {
 
 const PORT = APP_PORT;
 app.listen(PORT, () => {
+  const databaseHealth = getDatabaseHealthInfo();
   console.log(`NBCuniversal backend listening on port ${PORT}`);
+  console.log(
+    `[database] sqlite path=${databaseHealth.path} exists=${databaseHealth.exists} writable=${databaseHealth.writable} sizeBytes=${databaseHealth.sizeBytes}`
+  );
+  if (!databaseHealth.writable) {
+    console.warn('[database] The configured SQLite directory is not writable. Persistence may fail.');
+  }
   scheduleEnvHealthAutoSync(PORT);
   
 });

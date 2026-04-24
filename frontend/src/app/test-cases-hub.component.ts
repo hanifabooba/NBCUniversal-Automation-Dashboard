@@ -7,6 +7,8 @@ interface TestCaseLink {
   description: string;
   url: string;
   tag?: string;
+  blocked?: boolean;
+  blockedMessage?: string;
 }
 
 @Component({
@@ -17,6 +19,8 @@ interface TestCaseLink {
   styleUrls: ['./test-cases-hub.component.css']
 })
 export class TestCasesHubComponent {
+  blockedModalMessage = '';
+
   constructor(
     private location: Location,
     private router: Router
@@ -27,7 +31,9 @@ export class TestCasesHubComponent {
       title: 'Deepali Automation Suite',
       description: 'Google Sheets library for Deepali automation test suite.',
       url: 'https://docs.google.com/spreadsheets/d/1W5WLPY4IppnJp87Njco2E57WOP4_5l_cLT8AyXow_7o/edit?gid=0#gid=0',
-      tag: 'Google Sheets'
+      tag: 'Google Sheets',
+      blocked: true,
+      blockedMessage: 'This source is currently being worked on and is not available right now.'
     },
     {
       title: 'Regression Test Case Document',
@@ -52,5 +58,19 @@ export class TestCasesHubComponent {
     }
 
     this.router.navigateByUrl('/');
+  }
+
+  openLink(event: Event, link: TestCaseLink): void {
+    if (!link.blocked) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    this.blockedModalMessage = link.blockedMessage || 'This source is currently being worked on and is not available right now.';
+  }
+
+  closeBlockedModal(): void {
+    this.blockedModalMessage = '';
   }
 }

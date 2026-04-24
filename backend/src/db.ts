@@ -1,15 +1,59 @@
 import Database from 'better-sqlite3';
 import path from 'path';
-import { existsSync, mkdirSync } from 'fs';
+import { constants as fsConstants, existsSync, mkdirSync, accessSync, statSync } from 'fs';
 import bcrypt from 'bcryptjs';
+import { WEEKLY_STATUS_BOARD_DEFINITIONS } from './weekly-status';
 
-const dataDir = path.join(process.cwd(), 'data');
-if (!existsSync(dataDir)) mkdirSync(dataDir);
-const dbPath = path.join(dataDir, 'nbcuniversal.db');
+const configuredDatabasePath = String(process.env.DATABASE_PATH || process.env.SQLITE_DB_PATH || '').trim();
+const configuredDataDir = String(process.env.DATA_DIR || process.env.DATABASE_DIR || '').trim();
+const defaultDataDir = path.join(process.cwd(), 'data');
 
-export const db = new Database(dbPath);
+export const databaseDirectory = configuredDatabasePath
+  ? path.dirname(path.resolve(configuredDatabasePath))
+  : path.resolve(configuredDataDir || defaultDataDir);
+
+if (!existsSync(databaseDirectory)) {
+  mkdirSync(databaseDirectory, { recursive: true });
+}
+
+export const databasePath = configuredDatabasePath
+  ? path.resolve(configuredDatabasePath)
+  : path.join(databaseDirectory, 'nbcuniversal.db');
+
+export const db = new Database(databasePath);
 
 db.pragma('journal_mode = WAL');
+
+export function getDatabaseHealthInfo() {
+  const databaseExists = existsSync(databasePath);
+  let databaseWritable = false;
+  let databaseSizeBytes = 0;
+
+  try {
+    accessSync(databaseDirectory, fsConstants.R_OK | fsConstants.W_OK);
+    databaseWritable = true;
+  } catch {
+    databaseWritable = false;
+  }
+
+  if (databaseExists) {
+    try {
+      databaseSizeBytes = statSync(databasePath).size;
+    } catch {
+      databaseSizeBytes = 0;
+    }
+  }
+
+  return {
+    path: databasePath,
+    directory: databaseDirectory,
+    exists: databaseExists,
+    writable: databaseWritable,
+    sizeBytes: databaseSizeBytes,
+    configuredPath: configuredDatabasePath || null,
+    configuredDirectory: configuredDataDir || null
+  };
+}
 
 db.prepare(`
   CREATE TABLE IF NOT EXISTS users (
@@ -110,6 +154,23 @@ db.prepare(`
 `).run();
 
 db.prepare(`
+  CREATE TABLE IF NOT EXISTS weekly_board_definitions (
+    id TEXT PRIMARY KEY,
+    sn INTEGER NOT NULL,
+    platform TEXT NOT NULL,
+    platformLabel TEXT NOT NULL,
+    suite TEXT NOT NULL,
+    suiteLabel TEXT NOT NULL,
+    testCases INTEGER DEFAULT 0,
+    applicationCoverage REAL,
+    automationScripts INTEGER DEFAULT 0,
+    coveragePercent REAL DEFAULT 0,
+    supportedExecutionTypes TEXT NOT NULL,
+    tagAliases TEXT NOT NULL
+  );
+`).run();
+
+db.prepare(`
   CREATE TABLE IF NOT EXISTS weekly_automation_executions (
     id TEXT PRIMARY KEY,
     boardId TEXT NOT NULL,
@@ -145,6 +206,43 @@ db.prepare(`
 `).run();
 
 db.prepare(`
+  CREATE TABLE IF NOT EXISTS execute_test_runs (
+    id INTEGER PRIMARY KEY,
+    status TEXT NOT NULL,
+    who TEXT NOT NULL,
+    timeLabel TEXT,
+    dateLabel TEXT,
+    environment TEXT,
+    feature TEXT,
+    displayLabel TEXT,
+    runType TEXT NOT NULL,
+    featureFiles TEXT,
+    browser TEXT,
+    deviceType TEXT,
+    branch TEXT,
+    comment TEXT,
+    jira TEXT,
+    queueUrl TEXT,
+    buildUrl TEXT,
+    buildNumber INTEGER,
+    queueId INTEGER,
+    note TEXT,
+    runPrefix TEXT,
+    testJsonUrl TEXT,
+    resultUrl TEXT,
+    artifactError TEXT,
+    createdAt TEXT NOT NULL,
+    updatedAt TEXT NOT NULL,
+    weeklyExecutionId TEXT
+  );
+`).run();
+
+db.prepare(`
+  CREATE INDEX IF NOT EXISTS idx_weekly_board_definitions_platform_suite
+  ON weekly_board_definitions (platform, suite);
+`).run();
+
+db.prepare(`
   CREATE INDEX IF NOT EXISTS idx_weekly_exec_week
   ON weekly_automation_executions (executedWeekStart, executedWeekEnd, platform, suite, executionType, executedAt);
 `).run();
@@ -152,6 +250,11 @@ db.prepare(`
 db.prepare(`
   CREATE INDEX IF NOT EXISTS idx_weekly_exec_queue
   ON weekly_automation_executions (queueId);
+`).run();
+
+db.prepare(`
+  CREATE INDEX IF NOT EXISTS idx_execute_test_runs_created_at
+  ON execute_test_runs (createdAt DESC, id DESC);
 `).run();
 
 // Lightweight migrations for older DBs (SQLite doesn't support IF NOT EXISTS on columns)
@@ -183,6 +286,91 @@ function ensureTestRunsSchema() {
 }
 
 ensureTestRunsSchema();
+
+function ensureExecuteTestRunsSchema() {
+  const columns = db
+    .prepare(`PRAGMA table_info(execute_test_runs)`)
+    .all()
+    .map((c: any) => c.name) as string[];
+
+  const addColumn = (name: string, def: string) => {
+    if (columns.includes(name)) return;
+    try {
+      db.prepare(`ALTER TABLE execute_test_runs ADD COLUMN ${name} ${def}`).run();
+    } catch {
+      // ignore; column may already exist from another process
+    }
+  };
+
+  addColumn('displayLabel', 'TEXT');
+  addColumn('featureFiles', 'TEXT');
+  addColumn('browser', 'TEXT');
+  addColumn('deviceType', 'TEXT');
+  addColumn('branch', 'TEXT');
+  addColumn('comment', 'TEXT');
+  addColumn('jira', 'TEXT');
+  addColumn('queueUrl', 'TEXT');
+  addColumn('buildUrl', 'TEXT');
+  addColumn('buildNumber', 'INTEGER');
+  addColumn('queueId', 'INTEGER');
+  addColumn('note', 'TEXT');
+  addColumn('runPrefix', 'TEXT');
+  addColumn('testJsonUrl', 'TEXT');
+  addColumn('resultUrl', 'TEXT');
+  addColumn('artifactError', 'TEXT');
+  addColumn('updatedAt', 'TEXT');
+  addColumn('weeklyExecutionId', 'TEXT');
+}
+
+ensureExecuteTestRunsSchema();
+
+function ensureWeeklyBoardDefinitionsSeedData() {
+  const insert = db.prepare(`
+    INSERT INTO weekly_board_definitions (
+      id,
+      sn,
+      platform,
+      platformLabel,
+      suite,
+      suiteLabel,
+      testCases,
+      applicationCoverage,
+      automationScripts,
+      coveragePercent,
+      supportedExecutionTypes,
+      tagAliases
+    ) VALUES (
+      @id,
+      @sn,
+      @platform,
+      @platformLabel,
+      @suite,
+      @suiteLabel,
+      @testCases,
+      @applicationCoverage,
+      @automationScripts,
+      @coveragePercent,
+      @supportedExecutionTypes,
+      @tagAliases
+    )
+    ON CONFLICT(id) DO NOTHING
+  `);
+
+  const seedMany = db.transaction((rows: typeof WEEKLY_STATUS_BOARD_DEFINITIONS) => {
+    for (const row of rows) {
+      insert.run({
+        ...row,
+        applicationCoverage: row.applicationCoverage ?? null,
+        supportedExecutionTypes: JSON.stringify(row.supportedExecutionTypes),
+        tagAliases: JSON.stringify(row.tagAliases)
+      });
+    }
+  });
+
+  seedMany(WEEKLY_STATUS_BOARD_DEFINITIONS);
+}
+
+ensureWeeklyBoardDefinitionsSeedData();
 
 const seedProducts = [
   { slug: 'chili', name: 'Chili Peppers', imageUrl: '/assets/images/chili.png', shortDescription: 'Sun-ripened organic chili peppers with warm Ghanaian heat.', price: 20, inStock: 1 },
