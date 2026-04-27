@@ -4302,25 +4302,66 @@ app.post('/api/jenkins/build/stop', async (req, res) => {
   }
 });
 
+async function buildWeeklyStatusHttpPayload(query: {
+  weekStart?: string;
+  weekEnd?: string;
+  platform?: string;
+  suite?: string;
+  executionType?: string;
+}): Promise<{
+  weekStart: string;
+  weekEnd: string;
+  label: string;
+  summary: WeeklyStatusSummary;
+  rows: WeeklyBoardRow[];
+}> {
+  const range = resolveWorkingWeekRange(query.weekStart, query.weekEnd);
+  const executions = await refreshWeeklyExecutionsForRange(range.weekStart, range.weekEnd);
+  const payload = buildWeeklyStatusResponse(range.weekStart, range.weekEnd, executions, {
+    platform: query.platform,
+    suite: query.suite,
+    executionType: query.executionType
+  });
+
+  return {
+    weekStart: range.weekStart,
+    weekEnd: range.weekEnd,
+    label: range.label,
+    summary: payload.summary,
+    rows: payload.rows
+  };
+}
+
 app.get('/api/automation/weekly-status', async (req, res) => {
   try {
-    const range = resolveWorkingWeekRange(req.query.weekStart as string | undefined, req.query.weekEnd as string | undefined);
-    const executions = await refreshWeeklyExecutionsForRange(range.weekStart, range.weekEnd);
-    const payload = buildWeeklyStatusResponse(range.weekStart, range.weekEnd, executions, {
-      platform: req.query.platform as string | undefined,
-      suite: req.query.suite as string | undefined,
-      executionType: req.query.executionType as string | undefined
-    });
-
-    return res.json({
-      weekStart: range.weekStart,
-      weekEnd: range.weekEnd,
-      label: range.label,
-      summary: payload.summary,
-      rows: payload.rows
-    });
+    return res.json(
+      await buildWeeklyStatusHttpPayload({
+        weekStart: req.query.weekStart as string | undefined,
+        weekEnd: req.query.weekEnd as string | undefined,
+        platform: req.query.platform as string | undefined,
+        suite: req.query.suite as string | undefined,
+        executionType: req.query.executionType as string | undefined
+      })
+    );
   } catch (err: any) {
     console.error('Weekly status fetch error', err);
+    return res.status(500).json({ message: 'Error loading weekly status board', error: String(err?.message || err) });
+  }
+});
+
+app.get('/api/results/weekly-status', async (req, res) => {
+  try {
+    return res.json(
+      await buildWeeklyStatusHttpPayload({
+        weekStart: req.query.weekStart as string | undefined,
+        weekEnd: req.query.weekEnd as string | undefined,
+        platform: req.query.platform as string | undefined,
+        suite: req.query.suite as string | undefined,
+        executionType: req.query.executionType as string | undefined
+      })
+    );
+  } catch (err: any) {
+    console.error('Results alias weekly status fetch error', err);
     return res.status(500).json({ message: 'Error loading weekly status board', error: String(err?.message || err) });
   }
 });
@@ -4337,6 +4378,22 @@ app.get('/api/automation/kpi', async (req, res) => {
     return res.json(payload);
   } catch (err: any) {
     console.error('Automation KPI fetch error', err);
+    return res.status(500).json({ message: 'Error loading automation KPI data', error: String(err?.message || err) });
+  }
+});
+
+app.get('/api/results/automation-kpi', async (req, res) => {
+  try {
+    const payload = await buildAutomationKpiResponse({
+      weekStart: req.query.weekStart as string | undefined,
+      weekEnd: req.query.weekEnd as string | undefined,
+      platform: req.query.platform as string | undefined,
+      suite: req.query.suite as string | undefined,
+      executionType: req.query.executionType as string | undefined
+    });
+    return res.json(payload);
+  } catch (err: any) {
+    console.error('Results alias automation KPI fetch error', err);
     return res.status(500).json({ message: 'Error loading automation KPI data', error: String(err?.message || err) });
   }
 });
