@@ -3100,7 +3100,42 @@ app.get('/api/results/result-url', async (req, res) => {
 });
 
 // Result runs storage (full test.json with result link)
-app.get('/api/result-runs', async (_req, res) => {
+app.get('/api/result-runs', async (req, res) => {
+  const view = String(req.query.view || '').trim().toLowerCase();
+
+  if (view === 'weekly-status') {
+    try {
+      return res.json(
+        await buildWeeklyStatusHttpPayload({
+          weekStart: req.query.weekStart as string | undefined,
+          weekEnd: req.query.weekEnd as string | undefined,
+          platform: req.query.platform as string | undefined,
+          suite: req.query.suite as string | undefined,
+          executionType: req.query.executionType as string | undefined
+        })
+      );
+    } catch (err: any) {
+      console.error('Result runs weekly status view error', err);
+      return res.status(500).json({ message: 'Error loading weekly status board', error: String(err?.message || err) });
+    }
+  }
+
+  if (view === 'automation-kpi') {
+    try {
+      const payload = await buildAutomationKpiResponse({
+        weekStart: req.query.weekStart as string | undefined,
+        weekEnd: req.query.weekEnd as string | undefined,
+        platform: req.query.platform as string | undefined,
+        suite: req.query.suite as string | undefined,
+        executionType: req.query.executionType as string | undefined
+      });
+      return res.json(payload);
+    } catch (err: any) {
+      console.error('Result runs automation KPI view error', err);
+      return res.status(500).json({ message: 'Error loading automation KPI data', error: String(err?.message || err) });
+    }
+  }
+
   const now = Date.now();
   const runs = loadResultRuns(false)
     .filter(r => !r.expiresAt || Date.parse(r.expiresAt) > now)

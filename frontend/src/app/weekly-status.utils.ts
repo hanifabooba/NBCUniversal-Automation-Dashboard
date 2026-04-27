@@ -96,14 +96,7 @@ function extractMessageFromRawBody(rawBody: string): string {
 
   const normalized = trimmed.toLowerCase();
   if (normalized.startsWith('<!doctype') || normalized.startsWith('<html')) {
-    if (
-      normalized.includes('<app-root') ||
-      normalized.includes('<base href=') ||
-      normalized.includes('loading nbcuniversal')
-    ) {
-      return 'The automation API returned the frontend app shell instead of JSON. This usually means an /api/automation/* route is being routed to index.html instead of the backend service.';
-    }
-    return 'The automation API returned HTML instead of JSON. Please verify the production reverse proxy and backend API routing.';
+    return 'This data is temporarily unavailable. Please refresh and try again in a moment.';
   }
 
   return trimmed;
@@ -129,18 +122,15 @@ export function friendlyWeeklyStatusError(err: any, fallback: string): string {
     rawMessage.includes('unexpected response') ||
     rawMessage.includes('invalid JSON')
   ) {
-    if (rawMessage.includes('/api/automation/weekly-status') || rawMessage.includes('/api/automation/kpi')) {
-      return 'The automation API returned a non-JSON response. This usually means the requested /api/automation/* route is being routed to the frontend app instead of the backend API.';
-    }
-    return 'The automation API returned an unexpected response. Please verify the production API route is serving JSON correctly.';
+    return 'This data is temporarily unavailable. Please refresh and try again in a moment.';
   }
 
   const status = Number(err?.status ?? 0);
   if (status === 0) {
-    return 'The automation API could not be reached. Please verify the production API and reverse proxy are available.';
+    return 'We could not reach the service right now. Please check your connection and try again.';
   }
   if (status >= 500) {
-    return 'The automation API is temporarily unavailable. Please try again shortly.';
+    return 'This data is temporarily unavailable. Please try again shortly.';
   }
 
   return fallback;

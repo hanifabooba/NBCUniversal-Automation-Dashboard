@@ -11,18 +11,26 @@ import { buildAutomationKpiResponseFromWeeklyBoards, getWorkingWeekRange } from 
 
 @Injectable({ providedIn: 'root' })
 export class WeeklyStatusService {
-  private readonly weeklyStatusPrimaryUrl = '/api/results/weekly-status';
-  private readonly weeklyStatusFallbackUrl = '/api/automation/weekly-status';
-  private readonly automationKpiPrimaryUrl = '/api/results/automation-kpi';
-  private readonly automationKpiFallbackUrl = '/api/automation/kpi';
+  private readonly resultRunsUrl = '/api/result-runs';
+  private readonly weeklyStatusFallbackUrl = '/api/results/weekly-status';
+  private readonly automationKpiFallbackUrl = '/api/results/automation-kpi';
+  private readonly weeklyStatusLastResortUrl = '/api/automation/weekly-status';
+  private readonly automationKpiLastResortUrl = '/api/automation/kpi';
 
   constructor(private http: HttpClient) {}
 
   getWeeklyStatus(filter: WeeklyStatusFilter): Observable<WeeklyStatusResponse> {
-    return this.fetchWeeklyStatus(filter, this.weeklyStatusPrimaryUrl).pipe(
+    return this.fetchWeeklyStatusFromResultRuns(filter).pipe(
       catchError(err => {
         if (this.shouldTryAlternateApi(err)) {
-          return this.fetchWeeklyStatus(filter, this.weeklyStatusFallbackUrl);
+          return this.fetchWeeklyStatus(filter, this.weeklyStatusFallbackUrl).pipe(
+            catchError(fallbackErr => {
+              if (this.shouldTryAlternateApi(fallbackErr)) {
+                return this.fetchWeeklyStatus(filter, this.weeklyStatusLastResortUrl);
+              }
+              return throwError(() => fallbackErr);
+            })
+          );
         }
         return throwError(() => err);
       })
@@ -30,11 +38,21 @@ export class WeeklyStatusService {
   }
 
   getAutomationKpi(filter: WeeklyStatusFilter): Observable<AutomationKpiResponse> {
-    return this.fetchAutomationKpi(filter, this.automationKpiPrimaryUrl).pipe(
+    return this.fetchAutomationKpiFromResultRuns(filter).pipe(
       catchError(err => {
         if (this.shouldTryAlternateApi(err)) {
           return this.fetchAutomationKpi(filter, this.automationKpiFallbackUrl).pipe(
             catchError(fallbackErr => {
+              if (this.shouldTryAlternateApi(fallbackErr)) {
+                return this.fetchAutomationKpi(filter, this.automationKpiLastResortUrl).pipe(
+                  catchError(lastResortErr => {
+                    if (this.shouldFallbackToWeeklyStatus(lastResortErr)) {
+                      return this.buildAutomationKpiFallback(filter);
+                    }
+                    return throwError(() => lastResortErr);
+                  })
+                );
+              }
               if (this.shouldFallbackToWeeklyStatus(fallbackErr)) {
                 return this.buildAutomationKpiFallback(filter);
               }
@@ -91,8 +109,30 @@ export class WeeklyStatusService {
     });
   }
 
+  private fetchWeeklyStatusFromResultRuns(filter: WeeklyStatusFilter): Observable<WeeklyStatusResponse> {
+    return this.getJson<WeeklyStatusResponse>(this.resultRunsUrl, {
+      view: 'weekly-status',
+      weekStart: filter.weekStart,
+      weekEnd: filter.weekEnd,
+      platform: filter.platform || '',
+      suite: filter.suite || '',
+      executionType: filter.executionType || ''
+    });
+  }
+
   private fetchAutomationKpi(filter: WeeklyStatusFilter, url: string): Observable<AutomationKpiResponse> {
     return this.getJson<AutomationKpiResponse>(url, {
+      weekStart: filter.weekStart,
+      weekEnd: filter.weekEnd,
+      platform: filter.platform || '',
+      suite: filter.suite || '',
+      executionType: filter.executionType || ''
+    });
+  }
+
+  private fetchAutomationKpiFromResultRuns(filter: WeeklyStatusFilter): Observable<AutomationKpiResponse> {
+    return this.getJson<AutomationKpiResponse>(this.resultRunsUrl, {
+      view: 'automation-kpi',
       weekStart: filter.weekStart,
       weekEnd: filter.weekEnd,
       platform: filter.platform || '',
