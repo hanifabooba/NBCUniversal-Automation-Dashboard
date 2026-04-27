@@ -210,7 +210,17 @@ export class WeeklyStatusService {
   }
 
   private shouldFallbackToWeeklyStatus(err: unknown): boolean {
-    return Number((err as { status?: number } | null)?.status ?? 0) === 404;
+    const status = Number((err as { status?: number } | null)?.status ?? 0);
+    const message = String((err as { message?: string } | null)?.message ?? '').toLowerCase();
+
+    if (status === 404) {
+      return true;
+    }
+
+    return (
+      message.includes('frontend app shell instead of json') ||
+      message.includes('returned html instead of json')
+    );
   }
 
   private buildAutomationKpiFallback(filter: WeeklyStatusFilter): Observable<AutomationKpiResponse> {
