@@ -111,20 +111,21 @@
           </div>
           <div class="col-md-6 col-lg-4">
             <label class="form-label small text-uppercase text-muted">Device Type</label>
-            <div class="execute-test-choice-group">
-              <div class="form-check" *ngFor="let dt of deviceTypes">
-                <input
-                  class="form-check-input"
-                  type="radio"
-                  name="suiteDeviceType"
-                  [id]="'suite-' + dt"
-                  [value]="dt"
-                  [checked]="selectedDeviceTypes.includes(dt)"
-                  (change)="toggleDeviceType(dt, 'tag')"
-                >
-                <label class="form-check-label" [for]="'suite-' + dt">{{ dt }}</label>
+            <div class="execute-test-choice-group execute-test-choice-group--status">
+              <div
+                *ngFor="let dt of deviceTypes"
+                class="execute-test-device-button"
+                [class.execute-test-device-button--active]="selectedSuiteDeviceType === dt"
+                [class.execute-test-device-button--desktop]="selectedSuiteDeviceType === dt && dt === 'Desktop_Web'"
+                [class.execute-test-device-button--mobile]="selectedSuiteDeviceType === dt && dt === 'Mobile_Web'"
+                [attr.aria-current]="selectedSuiteDeviceType === dt ? 'true' : null">
+                <span class="execute-test-device-button__icon">
+                  <i class="bi" [ngClass]="dt === 'Desktop_Web' ? 'bi-display' : 'bi-phone'"></i>
+                </span>
+                <span class="execute-test-device-button__label">{{ dt }}</span>
               </div>
             </div>
+            <div class="form-text">Feature tags starting with <code>&#64;dw</code> run <code>Desktop_Web</code>. Tags starting with <code>&#64;mw</code> run <code>Mobile_Web</code>.</div>
           </div>
           <div class="col-md-6 col-lg-4">
             <label class="form-label small text-uppercase text-muted">QA Operator</label>
@@ -187,7 +188,7 @@
                   [id]="'ondemand-' + dt"
                   [value]="dt"
                   [checked]="onDemandSelectedDeviceTypes.includes(dt)"
-                  (change)="toggleDeviceType(dt, 'test-cases')"
+                  (change)="selectOnDemandDeviceType(dt)"
                 >
                 <label class="form-check-label" [for]="'ondemand-' + dt">{{ dt }}</label>
               </div>

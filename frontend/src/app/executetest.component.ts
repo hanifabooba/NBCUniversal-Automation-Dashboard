@@ -108,9 +108,8 @@ export class ExecuteTestComponent {
   readonly onDemandSuiteFolders = ['Regression', 'Sanity', 'Unified'];
 
   selectedEnv = 'Preprod';
-  selectedBrowser = 'chrome';
-  selectedDeviceTypes: string[] = ['Desktop_Web'];
   selectedFeature = '@dw_smoke';
+  selectedBrowser = 'chrome';
   qaUser = '';
   comment = '';
   jiraTicket = '';
@@ -170,11 +169,15 @@ export class ExecuteTestComponent {
     return this.recentRuns[0] ?? null;
   }
 
+  get selectedSuiteDeviceType(): string {
+    return this.deviceTypeForFeatureTag(this.selectedFeature);
+  }
+
   triggerJenkins(): void {
     this.suiteTriggerStatus = '';
     this.jenkinsBusy = true;
 
-    const deviceType = this.currentDeviceType(this.selectedDeviceTypes);
+    const deviceType = this.selectedSuiteDeviceType;
     const payload: JenkinsTriggerRequest = {
       environment: this.selectedEnv,
       featureTag: this.selectedFeature,
@@ -314,12 +317,8 @@ export class ExecuteTestComponent {
     });
   }
 
-  toggleDeviceType(type: string, target: ExecuteRunType): void {
+  selectOnDemandDeviceType(type: string): void {
     if (!type) return;
-    if (target === 'tag') {
-      this.selectedDeviceTypes = [type];
-      return;
-    }
     this.onDemandSelectedDeviceTypes = [type];
   }
 
@@ -634,6 +633,11 @@ export class ExecuteTestComponent {
   private currentDeviceType(selectedDeviceTypes: string[]): string {
     const first = selectedDeviceTypes.find(Boolean);
     return first || 'Desktop_Web';
+  }
+
+  private deviceTypeForFeatureTag(featureTag: string | undefined): string {
+    const normalized = String(featureTag || '').trim().toLowerCase();
+    return normalized.startsWith('@mw') ? 'Mobile_Web' : 'Desktop_Web';
   }
 
   private prepareOnDemandSelections(): {
