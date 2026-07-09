@@ -22,6 +22,8 @@ type ExecuteRun = SharedExecuteTestRun & {
   fetchingArtifacts?: boolean;
 };
 
+type MobileOsOption = 'Android' | 'iOS';
+
 @Component({
   standalone: true,
   selector: 'app-executetest',
@@ -34,6 +36,7 @@ export class ExecuteTestComponent {
   jenkinsEnvironments = ['Production', 'Preprod', 'Stage'];
   jenkinsBrowsers = ['chrome', 'firefox', 'MicrosoftEdge'];
   deviceTypes = ['Desktop_Web', 'Mobile_Web'];
+  mobileOsOptions: MobileOsOption[] = ['Android', 'iOS'];
   jenkinsFeatures = [
     '@dw_smoke',
     '@mw_smoke',
@@ -113,12 +116,14 @@ export class ExecuteTestComponent {
   qaUser = '';
   comment = '';
   jiraTicket = '';
+  selectedSuiteMobileOs: MobileOsOption = 'Android';
   suiteTriggerStatus = '';
   jenkinsBusy = false;
 
   onDemandSelectedEnv = 'Preprod';
   onDemandSelectedBrowser = 'chrome';
   onDemandSelectedDeviceTypes: string[] = ['Desktop_Web'];
+  onDemandSelectedMobileOs: MobileOsOption = 'Android';
   onDemandBranch = this.defaultAutomationBranch;
   onDemandTestCases: JenkinsOnDemandTestCaseRequest[] = [
     { appFolder: 'nbc_WP', suiteFolder: 'Regression', fileName: '' }
@@ -182,7 +187,8 @@ export class ExecuteTestComponent {
       environment: this.selectedEnv,
       featureTag: this.selectedFeature,
       browser: this.selectedBrowser,
-      deviceType
+      deviceType,
+      mobileOs: this.mobileOsForDeviceType(deviceType, this.selectedSuiteMobileOs)
     };
 
     this.jenkins.triggerBuild(payload).subscribe({
@@ -201,6 +207,7 @@ export class ExecuteTestComponent {
           feature: this.selectedFeature,
           browser: this.selectedBrowser,
           deviceType,
+          mobileOs: this.mobileOsForDeviceType(deviceType, this.selectedSuiteMobileOs),
           comment: userComment,
           jira: userJira
         });
@@ -240,7 +247,8 @@ export class ExecuteTestComponent {
       browser: this.onDemandSelectedBrowser,
       branch,
       testCases: prepared.testCases,
-      deviceType
+      deviceType,
+      mobileOs: this.mobileOsForDeviceType(deviceType, this.onDemandSelectedMobileOs)
     };
 
     this.jenkins.triggerFeatureFilesBuild(payload).subscribe({
@@ -263,6 +271,7 @@ export class ExecuteTestComponent {
           branch: res.branch || branch,
           browser: this.onDemandSelectedBrowser,
           deviceType,
+          mobileOs: this.mobileOsForDeviceType(deviceType, this.onDemandSelectedMobileOs),
           comment: userComment,
           jira: userJira
         });
@@ -320,6 +329,14 @@ export class ExecuteTestComponent {
   selectOnDemandDeviceType(type: string): void {
     if (!type) return;
     this.onDemandSelectedDeviceTypes = [type];
+  }
+
+  selectSuiteMobileOs(option: MobileOsOption): void {
+    this.selectedSuiteMobileOs = option;
+  }
+
+  selectOnDemandMobileOs(option: MobileOsOption): void {
+    this.onDemandSelectedMobileOs = option;
   }
 
   runTypeLabel(run: ExecuteRun): string {
@@ -458,6 +475,7 @@ export class ExecuteTestComponent {
     branch?: string;
     browser?: string;
     deviceType?: string;
+    mobileOs?: string;
     comment?: string;
     jira?: string;
   }): ExecuteRun {
@@ -482,6 +500,7 @@ export class ExecuteTestComponent {
       branch: input.branch,
       browser: input.browser,
       deviceType: input.deviceType,
+      mobileOs: input.mobileOs,
       comment: input.comment || '',
       jira: input.jira || '',
       queueUrl: input.response.queueUrl,
@@ -559,6 +578,7 @@ export class ExecuteTestComponent {
       featureFiles: run.featureFiles,
       browser: run.browser,
       deviceType: run.deviceType,
+      mobileOs: run.mobileOs,
       branch: run.branch,
       comment: run.comment,
       jira: run.jira,
@@ -603,6 +623,7 @@ export class ExecuteTestComponent {
       featureFiles,
       browser: this.optionalString(raw?.browser),
       deviceType: this.optionalString(raw?.deviceType),
+      mobileOs: this.optionalString(raw?.mobileOs),
       branch: this.optionalString(raw?.branch),
       comment: this.optionalString(raw?.comment),
       jira: this.optionalString(raw?.jira),
@@ -633,6 +654,10 @@ export class ExecuteTestComponent {
   private currentDeviceType(selectedDeviceTypes: string[]): string {
     const first = selectedDeviceTypes.find(Boolean);
     return first || 'Desktop_Web';
+  }
+
+  private mobileOsForDeviceType(deviceType: string | undefined, mobileOs: MobileOsOption): string | undefined {
+    return deviceType === 'Mobile_Web' ? mobileOs : undefined;
   }
 
   private deviceTypeForFeatureTag(featureTag: string | undefined): string {

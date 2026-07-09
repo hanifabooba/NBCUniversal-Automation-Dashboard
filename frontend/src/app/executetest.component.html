@@ -127,6 +127,23 @@
             </div>
             <div class="form-text">Feature tags starting with <code>&#64;dw</code> run <code>Desktop_Web</code>. Tags starting with <code>&#64;mw</code> run <code>Mobile_Web</code>.</div>
           </div>
+          <div class="col-md-6 col-lg-4" *ngIf="selectedSuiteDeviceType === 'Mobile_Web'">
+            <label class="form-label small text-uppercase text-muted">Mobile OS</label>
+            <div class="execute-test-choice-group execute-test-choice-group--mobile-os">
+              <button
+                *ngFor="let mobileOs of mobileOsOptions"
+                type="button"
+                class="execute-test-os-button"
+                [class.execute-test-os-button--active]="selectedSuiteMobileOs === mobileOs"
+                (click)="selectSuiteMobileOs(mobileOs)">
+                <span class="execute-test-os-button__icon">
+                  <i class="bi" [ngClass]="mobileOs === 'Android' ? 'bi-android2' : 'bi-apple'"></i>
+                </span>
+                <span class="execute-test-os-button__label">{{ mobileOs }}</span>
+              </button>
+            </div>
+            <div class="form-text"><code>Android</code> is preselected. Choose <code>iOS</code> to switch the Jenkins suite file to <code>awsMainiOS.xml</code>.</div>
+          </div>
           <div class="col-md-6 col-lg-4">
             <label class="form-label small text-uppercase text-muted">QA Operator</label>
             <input class="form-control" [(ngModel)]="qaUser" placeholder="Who is triggering this run?">
@@ -193,6 +210,23 @@
                 <label class="form-check-label" [for]="'ondemand-' + dt">{{ dt }}</label>
               </div>
             </div>
+          </div>
+          <div class="col-md-6 col-lg-3" *ngIf="onDemandSelectedDeviceTypes.includes('Mobile_Web')">
+            <label class="form-label small text-uppercase text-muted">Mobile OS</label>
+            <div class="execute-test-choice-group execute-test-choice-group--mobile-os">
+              <button
+                *ngFor="let mobileOs of mobileOsOptions"
+                type="button"
+                class="execute-test-os-button execute-test-os-button--compact"
+                [class.execute-test-os-button--active]="onDemandSelectedMobileOs === mobileOs"
+                (click)="selectOnDemandMobileOs(mobileOs)">
+                <span class="execute-test-os-button__icon">
+                  <i class="bi" [ngClass]="mobileOs === 'Android' ? 'bi-android2' : 'bi-apple'"></i>
+                </span>
+                <span class="execute-test-os-button__label">{{ mobileOs }}</span>
+              </button>
+            </div>
+            <div class="form-text"><code>Android</code> uses <code>awsMainAndroid.xml</code>. Select <code>iOS</code> to use <code>awsMainiOS.xml</code>.</div>
           </div>
           <div class="col-md-6 col-lg-3">
             <label class="form-label small text-uppercase text-muted">Automation Branch</label>
@@ -325,8 +359,12 @@
                   {{ run.browser }}
                 </span>
                 <span class="execute-test-chip execute-test-chip--neutral" *ngIf="run.deviceType">
-                  <i class="bi bi-phone me-1"></i>
+                  <i class="bi me-1" [ngClass]="run.deviceType === 'Desktop_Web' ? 'bi-display' : 'bi-phone'"></i>
                   {{ run.deviceType }}
+                </span>
+                <span class="execute-test-chip execute-test-chip--neutral" *ngIf="run.mobileOs">
+                  <i class="bi me-1" [ngClass]="run.mobileOs === 'Android' ? 'bi-android2' : 'bi-apple'"></i>
+                  {{ run.mobileOs }}
                 </span>
               </div>
 
@@ -338,6 +376,10 @@
                 <div class="execute-test-detail-row" *ngIf="run.branch">
                   <span>Branch</span>
                   <strong>{{ run.branch }}</strong>
+                </div>
+                <div class="execute-test-detail-row" *ngIf="run.mobileOs">
+                  <span>Mobile OS</span>
+                  <strong>{{ run.mobileOs }}</strong>
                 </div>
                 <div class="execute-test-detail-row">
                   <span>Selection</span>

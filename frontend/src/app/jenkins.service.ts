@@ -7,6 +7,7 @@ export interface JenkinsTriggerRequest {
   featureTag: string;
   browser?: string;
   deviceType?: string;
+  mobileOs?: string;
   cause?: string;
 }
 
@@ -26,6 +27,7 @@ export interface JenkinsFeatureFilesTriggerRequest {
   branch: string;
   testCases: JenkinsOnDemandTestCaseRequest[];
   deviceType?: string;
+  mobileOs?: string;
   cause?: string;
 }
 
@@ -79,7 +81,8 @@ export class JenkinsService {
         FEATURE: body.featureTag,
         ENVIRONMENT: body.environment,
         BROWSER: body.browser,
-        DEVICE_TYPE: body.deviceType
+        DEVICE_TYPE: body.deviceType,
+        MOBILE_OS: body.mobileOs
       },
       cause: body.cause
     };

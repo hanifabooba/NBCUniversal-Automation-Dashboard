@@ -219,6 +219,7 @@ db.prepare(`
     featureFiles TEXT,
     browser TEXT,
     deviceType TEXT,
+    mobileOs TEXT,
     branch TEXT,
     comment TEXT,
     jira TEXT,
@@ -306,6 +307,7 @@ function ensureExecuteTestRunsSchema() {
   addColumn('featureFiles', 'TEXT');
   addColumn('browser', 'TEXT');
   addColumn('deviceType', 'TEXT');
+  addColumn('mobileOs', 'TEXT');
   addColumn('branch', 'TEXT');
   addColumn('comment', 'TEXT');
   addColumn('jira', 'TEXT');

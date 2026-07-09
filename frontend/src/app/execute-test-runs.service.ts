@@ -17,6 +17,7 @@ export interface SharedExecuteTestRun {
   featureFiles?: string[];
   browser?: string;
   deviceType?: string;
+  mobileOs?: string;
   branch?: string;
   comment?: string;
   jira?: string;

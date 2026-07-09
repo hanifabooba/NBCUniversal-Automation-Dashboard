@@ -714,6 +714,7 @@ type StoredExecuteTestRun = {
   featureFiles?: string[];
   browser?: string;
   deviceType?: string;
+  mobileOs?: string;
   branch?: string;
   comment?: string;
   jira?: string;
@@ -1079,6 +1080,7 @@ function mapExecuteTestRunRow(row: any): StoredExecuteTestRun {
     featureFiles,
     browser: row.browser ? String(row.browser) : undefined,
     deviceType: row.deviceType ? String(row.deviceType) : undefined,
+    mobileOs: row.mobileOs ? String(row.mobileOs) : undefined,
     branch: row.branch ? String(row.branch) : undefined,
     comment: row.comment ? String(row.comment) : undefined,
     jira: row.jira ? String(row.jira) : undefined,
@@ -1102,7 +1104,7 @@ function listExecuteTestRuns(limit = 20): StoredExecuteTestRun[] {
   const rows = db
     .prepare(
       `SELECT id, status, who, timeLabel, dateLabel, environment, feature, displayLabel, runType, featureFiles,
-              browser, deviceType, branch, comment, jira, queueUrl, buildUrl, buildNumber, queueId, note,
+              browser, deviceType, mobileOs, branch, comment, jira, queueUrl, buildUrl, buildNumber, queueId, note,
               runPrefix, testJsonUrl, resultUrl, artifactError, createdAt, updatedAt, weeklyExecutionId
        FROM execute_test_runs
        ORDER BY datetime(createdAt) DESC, id DESC
@@ -1116,7 +1118,7 @@ function getExecuteTestRun(id: number): StoredExecuteTestRun | undefined {
   const row = db
     .prepare(
       `SELECT id, status, who, timeLabel, dateLabel, environment, feature, displayLabel, runType, featureFiles,
-              browser, deviceType, branch, comment, jira, queueUrl, buildUrl, buildNumber, queueId, note,
+              browser, deviceType, mobileOs, branch, comment, jira, queueUrl, buildUrl, buildNumber, queueId, note,
               runPrefix, testJsonUrl, resultUrl, artifactError, createdAt, updatedAt, weeklyExecutionId
        FROM execute_test_runs
        WHERE id = ?`
@@ -1153,6 +1155,7 @@ function normalizeExecuteTestRunPayload(body: any): StoredExecuteTestRun {
     featureFiles,
     browser: normalizeOptionalString(body?.browser),
     deviceType: normalizeOptionalString(body?.deviceType),
+    mobileOs: normalizeMobileOsForDeviceType(body?.deviceType, body?.mobileOs),
     branch: normalizeOptionalString(body?.branch),
     comment: normalizeOptionalString(body?.comment),
     jira: normalizeOptionalString(body?.jira),
@@ -1175,11 +1178,11 @@ function upsertExecuteTestRunToDb(run: StoredExecuteTestRun): StoredExecuteTestR
   db.prepare(
     `INSERT INTO execute_test_runs (
        id, status, who, timeLabel, dateLabel, environment, feature, displayLabel, runType, featureFiles,
-       browser, deviceType, branch, comment, jira, queueUrl, buildUrl, buildNumber, queueId, note,
+       browser, deviceType, mobileOs, branch, comment, jira, queueUrl, buildUrl, buildNumber, queueId, note,
        runPrefix, testJsonUrl, resultUrl, artifactError, createdAt, updatedAt, weeklyExecutionId
      ) VALUES (
        @id, @status, @who, @timeLabel, @dateLabel, @environment, @feature, @displayLabel, @runType, @featureFiles,
-       @browser, @deviceType, @branch, @comment, @jira, @queueUrl, @buildUrl, @buildNumber, @queueId, @note,
+       @browser, @deviceType, @mobileOs, @branch, @comment, @jira, @queueUrl, @buildUrl, @buildNumber, @queueId, @note,
        @runPrefix, @testJsonUrl, @resultUrl, @artifactError, @createdAt, @updatedAt, @weeklyExecutionId
      )
      ON CONFLICT(id) DO UPDATE SET
@@ -1194,6 +1197,7 @@ function upsertExecuteTestRunToDb(run: StoredExecuteTestRun): StoredExecuteTestR
        featureFiles = CASE WHEN @featureFiles IS NULL THEN execute_test_runs.featureFiles ELSE @featureFiles END,
        browser = COALESCE(@browser, execute_test_runs.browser),
        deviceType = COALESCE(@deviceType, execute_test_runs.deviceType),
+       mobileOs = COALESCE(@mobileOs, execute_test_runs.mobileOs),
        branch = COALESCE(@branch, execute_test_runs.branch),
        comment = COALESCE(@comment, execute_test_runs.comment),
        jira = COALESCE(@jira, execute_test_runs.jira),
@@ -1221,6 +1225,7 @@ function upsertExecuteTestRunToDb(run: StoredExecuteTestRun): StoredExecuteTestR
     featureFiles: run.featureFiles?.length ? JSON.stringify(run.featureFiles) : null,
     browser: run.browser ?? null,
     deviceType: run.deviceType ?? null,
+    mobileOs: run.mobileOs ?? null,
     branch: run.branch ?? null,
     comment: run.comment ?? null,
     jira: run.jira ?? null,
@@ -4006,6 +4011,23 @@ function normalizeOptionalString(value: unknown): string | undefined {
   return normalized || undefined;
 }
 
+function normalizeMobileOsForDeviceType(deviceType: unknown, mobileOs: unknown): 'Android' | 'iOS' | undefined {
+  const normalizedDeviceType = normalizeOptionalString(deviceType);
+  if (normalizedDeviceType !== 'Mobile_Web') {
+    return undefined;
+  }
+
+  const normalizedMobileOs = normalizeOptionalString(mobileOs);
+  if (!normalizedMobileOs) {
+    return 'Android';
+  }
+
+  const lowered = normalizedMobileOs.toLowerCase();
+  if (lowered === 'android') return 'Android';
+  if (lowered === 'ios') return 'iOS';
+  throw createHttpError('Mobile OS must be Android or iOS.');
+}
+
 const ON_DEMAND_APP_FOLDERS = new Set(['nbc_WP', 'nbc_mobweb']);
 const ON_DEMAND_SUITE_FOLDERS = new Set(['Regression', 'Sanity', 'Unified']);
 
@@ -4044,6 +4066,7 @@ function validateFeatureFileTriggerBody(body: {
   environment?: unknown;
   browser?: unknown;
   deviceType?: unknown;
+  mobileOs?: unknown;
   branch?: unknown;
   testCases?: unknown;
   featureFiles?: unknown;
@@ -4057,6 +4080,7 @@ function validateFeatureFileTriggerBody(body: {
   legacyFeatureFiles: string[];
   testCases?: NormalizedOnDemandTestCase[];
   deviceType?: string;
+  mobileOs?: 'Android' | 'iOS';
   jobUrl?: string;
   cause?: string;
 } {
@@ -4119,6 +4143,7 @@ function validateFeatureFileTriggerBody(body: {
       legacyFeatureFiles: dedupedTestCases.map(testCase => testCase.fileName),
       testCases: dedupedTestCases,
       deviceType: normalizeOptionalString(body.deviceType),
+      mobileOs: normalizeMobileOsForDeviceType(body.deviceType, body.mobileOs),
       jobUrl: normalizeOptionalString(body.jobUrl),
       cause: normalizeOptionalString(body.cause)
     };
@@ -4148,6 +4173,7 @@ function validateFeatureFileTriggerBody(body: {
     featureFiles,
     legacyFeatureFiles: featureFiles,
     deviceType: normalizeOptionalString(body.deviceType),
+    mobileOs: normalizeMobileOsForDeviceType(body.deviceType, body.mobileOs),
     jobUrl: normalizeOptionalString(body.jobUrl),
     cause: normalizeOptionalString(body.cause)
   };
@@ -4157,7 +4183,16 @@ function validateFeatureFileTriggerBody(body: {
 app.post('/api/jenkins/trigger', async (req, res) => {
   const { jobUrl, params, cause } = req.body as { jobUrl?: string; params?: Record<string, string>; cause?: string };
   try {
-    const result = await triggerJenkinsBuildRequest({ jobUrl, params, cause });
+    const normalizedParams = { ...(params || {}) };
+    const normalizedMobileOs = normalizeMobileOsForDeviceType(normalizedParams.DEVICE_TYPE, normalizedParams.MOBILE_OS);
+
+    if (normalizedMobileOs) {
+      normalizedParams.MOBILE_OS = normalizedMobileOs;
+    } else {
+      delete normalizedParams.MOBILE_OS;
+    }
+
+    const result = await triggerJenkinsBuildRequest({ jobUrl, params: normalizedParams, cause });
     return res.json(result);
   } catch (err: any) {
     if (err?.status) {
@@ -4178,6 +4213,7 @@ app.post('/api/jenkins/trigger-feature-files', async (req, res) => {
       environment?: unknown;
       browser?: unknown;
       deviceType?: unknown;
+      mobileOs?: unknown;
       branch?: unknown;
       testCases?: unknown;
       featureFiles?: unknown;
@@ -4200,7 +4236,8 @@ app.post('/api/jenkins/trigger-feature-files', async (req, res) => {
               FEATURE_ROOT: 'src/test/resources/features'
             }
           : {}),
-        ...(payload.deviceType ? { DEVICE_TYPE: payload.deviceType } : {})
+        ...(payload.deviceType ? { DEVICE_TYPE: payload.deviceType } : {}),
+        ...(payload.mobileOs ? { MOBILE_OS: payload.mobileOs } : {})
       },
       cause:
         payload.cause ||
